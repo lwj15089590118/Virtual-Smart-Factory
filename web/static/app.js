@@ -699,8 +699,11 @@ async function pollEnergy() {
   if (!d.ok) return;
   energyCache = d;
   if (!d.enabled) { $('emsSub').textContent = 'EMS 未启用'; return; }
+  // 班次3增强：分时电价——显示当前所处档位与单价
+  const tou = (d.tou_enabled && d.period_now)
+    ? ` · 现行[${d.period_now.tier}] ${d.period_now.price} 元/kWh` : '';
   $('emsSub').textContent =
-    `合计 ${d.total_kwh} kWh · 电费≈${d.cost_yuan}元 · CO₂≈${d.co2_kg}kg（仿真验证值）`;
+    `合计 ${d.total_kwh} kWh · 电费≈${d.cost_yuan}元${tou} · CO₂≈${d.co2_kg}kg（仿真验证值）`;
   if (charts.energy) {
     const devs = [...(d.devices || [])].sort((a, b) => a.kwh - b.kwh);
     charts.energy.setOption({

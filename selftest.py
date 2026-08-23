@@ -8,7 +8,7 @@ selftest.py —— 全厂自检（逐模块自检 + 10 分钟加速联跑冒烟�
     B. 系统级冒烟：用与 main.py 完全相同的 Plant 编排，fast 模式加速联跑
        600 仿真秒（=10 分钟），校验端到端物流守恒、事件落盘完整性；
     C. 班次3修改：新增 C 组用例——视觉算法指标达标(C1) / MES 追溯闭环(C2) /
-       EMS 能耗与评分合理性(C3)；
+       EMS 能耗与评分合理性(C3，电费为分时口径) / 指定数量订单全生命周期(C4)；
     D. 输出自检报告到 reports/selftest_report_*.txt 并打印结论。
 
 运行方式：
@@ -548,7 +548,14 @@ def case_ems_energy_health() -> str:
     expect_asm = S.EMS_POWER_KW["ASM-"]["运行"] * 60.0 / 3600.0
     assert abs(asm1["kwh"] - expect_asm) < 0.02, \
         f"装配 kWh 积分误差过大: {asm1['kwh']} vs {expect_asm:.4f}"
-    assert abs(e1["cost_yuan"] - e1["total_kwh"] * S.EMS_PRICE_YUAN_PER_KWH) < 0.01
+    # 分时电价口径（增强）：t∈[0,60s] 即 00:00-01:00，全部落在"谷"档计费
+    from ems.energy_model import tou_price_at
+    tier60, price60 = tou_price_at(30.0)
+    assert S.EMS_TOU_ENABLED and tier60 == "谷", f"00:30 应处谷档: {tier60}"
+    assert abs(e1["cost_yuan"] - e1["total_kwh"] * price60) < 0.01, \
+        f"谷档电费不符: {e1['cost_yuan']} vs {e1['total_kwh'] * price60:.4f}"
+    assert abs(sum(t["yuan"] for t in e1["tiers"]) - e1["cost_yuan"]) < 0.01, \
+        f"分档电费合计应等于总电费: {e1['tiers']}"
     plant.clock.run_until(120.0)
     e2 = plant.ems_energy.snapshot()
     assert e2["total_kwh"] > e1["total_kwh"], "能耗应随仿真时间单调增加"
@@ -587,10 +594,57 @@ def case_ems_energy_health() -> str:
     assert rd["ok"] and plant.devices[S.VISION_ID].state == DeviceState.STANDBY
     maint = plant.bus.replay(lambda e: e["type"] == EventTypes.EMS_MAINTENANCE)
     assert len(maint) >= 2, "维护进入/退出均应落审计事件"
-    return (f"60s装配能耗{asm1['kwh']}kWh(理论{expect_asm:.3f}), 总能耗单调增; "
+    return (f"60s装配能耗{asm1['kwh']}kWh(理论{expect_asm:.3f}), 总能耗单调增, "
+            f"谷档电费{e1['cost_yuan']}元(分档合计一致); "
             f"急停40s后装配评分{h0['devices'][0]['score']}→{h1['score']}"
             f"(停机{h1['downtime_s']}s), 连续故障后→{h2['score']}, "
             f"告警{len(alerts)}条; 维护命令闭环OK (仿真验证值)")
+
+
+def case_mes_order_lifecycle() -> str:
+    """C4 指定数量订单全生命周期：REST 命令开立 50 件工单 → 插单优先投产
+    （旧工单零污染）→ 满单自动关单（审计事件）→ 自动翻单开新单。"""
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    wo_first = plant.mes.orders[0]                    # 开局自动工单（默认计划量）
+    from scada.web_server import ScadaWebServer
+    srv = ScadaWebServer(plant)
+    client = srv.app.test_client()
+    rv = client.post("/api/command",
+                     json={"cmd": "mes_new_order", "params": {"qty": 50}})
+    assert rv.status_code == 200 and rv.get_json()["ok"], \
+        f"REST 开单失败: {rv.get_json()}"
+    wo50 = next(w for w in plant.mes.orders if w.target_qty == 50)
+    created = plant.bus.replay(lambda e: e["type"] == EventTypes.MES_ORDER_CREATED
+                               and e["data"].get("wo_id") == wo50.wo_id)
+    assert created and created[0]["data"]["target_qty"] == 50, "开单审计事件缺失"
+
+    # 直灌 50 件进视觉待检队列（绕过装配慢节拍），判定→报工走真实编排；
+    # 插单语义验证：报工必须全部记到新开的 50 件单，开局大单零污染
+    for i in range(50):
+        plant.vision.inbound.append(
+            Product(f"C4{i:08d}", born_at=plant.clock.now(), source_unit="C4-T"))
+    plant.clock.run_until(plant.clock.now() + 260.0)
+
+    assert wo_first.total_count == 0, \
+        f"插单期间旧工单不应收到报工: {wo_first.total_count}"
+    assert wo50.status == "已完成" and wo50.total_count == 50, \
+        f"50件订单未按计划量满单关单: {wo50.to_dict()}"
+    closed = plant.bus.replay(lambda e: e["type"] == EventTypes.MES_ORDER_CLOSED
+                              and e["data"].get("wo_id") == wo50.wo_id)
+    assert closed and closed[0]["data"]["total"] == 50, "满单关单审计事件缺失"
+    actives = [w for w in plant.mes.orders if w.status == "执行中"]
+    assert actives and actives[-1].target_qty == S.MES_DEFAULT_ORDER_QTY, \
+        "满单后应自动翻单开立默认计划量的新单"
+    rep = plant.mes.report()
+    assert rep["judged"] >= 50 and rep["ok"] + rep["ng"] == rep["judged"], \
+        f"报工账目不平: {rep}"
+    srv.stop()
+    return (f"{wo50.wo_id} 计划50件: REST开单→插单投产(旧单{wo_first.wo_id}报工0)"
+            f"→满单{wo50.total_count}件(OK{wo50.ok_count}/NG{wo50.ng_count})自动关单"
+            f"→翻单{actives[-1].wo_id}; 报表judged={rep['judged']} (仿真验证值)")
 
 
 # ======================================================================
@@ -672,7 +726,7 @@ def write_report(smoke_detail: str, report_path: str) -> None:
     total = len(RESULTS)
     lines = [
         "=" * 78,
-        "Virtual-Smart-Factory 班次3 全厂自检报告（班次3修改：新增C组用例）",
+        "Virtual-Smart-Factory 班次3 全厂自检报告（含C组用例 C1~C4）",
         f"生成时间: {datetime.now().isoformat(timespec='seconds')}",
         f"环境: Python {sys.version.split()[0]} @ Windows | "
         f"依赖: numpy/flask/pymodbus(标准库+numpy+flask+pymodbus 本班次实际使用)",
@@ -721,13 +775,15 @@ def main() -> int:
         run_case("B2", "Web API 冒烟(REST/命令/映射)", case_web_api)
         print("\n[B3] AGV 任务闭环：满托 agv.call → 车队搬运 → 入库 → 出库出厂…")
         run_case("B3", "AGV 任务闭环(入库+出库)", case_agv_loop)
-        # ---- 班次3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性）----
+        # ---- 班次3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性 / 订单全生命周期）----
         print("\n[C1] 视觉算法指标：三方 A/B 对照达标 + judge 注入在线混淆矩阵…")
         run_case("C1", "视觉算法指标达标(A/B对照)", case_vision_algo)
         print("\n[C2] MES 追溯闭环：四级反查 + 手动开单 + JSONL 回放重建…")
         run_case("C2", "MES 追溯闭环(产品→托盘→库位)", case_mes_trace)
         print("\n[C3] EMS 合理性：能耗积分单调 + 健康扣分方向 + 维护命令闭环…")
         run_case("C3", "EMS 能耗/健康评分合理性", case_ems_energy_health)
+        print("\n[C4] 指定数量订单全生命周期：REST开单50件→插单投产→满单关单→自动翻单…")
+        run_case("C4", "指定数量订单全生命周期(50件)", case_mes_order_lifecycle)
         print("\n[B1] 系统级冒烟：fast 加速联跑 600 仿真秒（≈真实产线10分钟）…")
         try:
             smoke_detail = smoke_full_plant()

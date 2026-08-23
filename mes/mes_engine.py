@@ -92,8 +92,13 @@ class MESEngine:
         return wo
 
     def _open_order(self) -> WorkOrder:
-        """取当前执行中的工单；没有则自动补开（防停产无单可报）。"""
-        for wo in self.orders:
+        """
+        取当前执行中的工单；没有则自动补开（防停产无单可报）。
+        语义（增强）：倒序取"最新一张"执行中工单——后开单优先投产，
+        对应真实产线"插单"习惯，也保证 Web/REST 手动指定数量的新单
+        立即成为当前报工对象（旧 FIFO 口径下手动单会永远排在大单之后）。
+        """
+        for wo in reversed(self.orders):
             if wo.status == "执行中":
                 return wo
         return self.create_order(S.MES_DEFAULT_ORDER_QTY)
