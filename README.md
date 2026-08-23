@@ -24,7 +24,7 @@
 | SCADA Web 服务 | `scada/web_server.py` | Flask REST：`/api/status /api/kpi /api/events /api/pallet3d /api/warehouse/locations /api/modbus/map`；POST `/api/command` 命令入口（带 ui.command 审计事件）；订阅总线通配符 "*" 实时 WS 推送；KPI 趋势分桶聚合 |
 | Modbus TCP 从站 | `scada/modbus_server.py` | pymodbus 把全部设备 io_table 映射为保持寄存器（状态码/故障标志/DI/DO/AI×100 定标）；DO/AO 支持写回设备；寄存器映射表可经 `/api/modbus/map` 导出给组态软件 |
 | AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系 |
-| 监控大屏 | `web/static/*` | ECharts(CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型3D(bar3D 毫米坐标)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
+| 监控大屏 | `web/static/*` | ECharts(本地 vendor 优先 + CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型三视图(等距自绘/真3D/俯视)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
 
 ## 三、班次3 新增能力（视觉算法 + MES 制造执行 + EMS 能源/健康管理）
 
@@ -114,7 +114,10 @@ Virtual-Smart-Factory/
 │  ├─ energy_model.py         设备能耗模型（状态功率曲线分段积分 → kWh/电费/CO₂）
 │  └─ health_monitor.py       设备健康评分（滚动窗口特征 → 0~100分 + 维护建议 + 告警）
 ├─ web/static/                【班次2新增·班次3扩展】监控大屏（index.html + app.js + style.css，
-│                             ECharts CDN；班次3追加面板⑨ MES工单追溯、面板⑩ 能耗·健康度）
+│                             ECharts 本地vendor优先+CDN回退；班次3追加面板⑨ MES工单追溯、
+│                             面板⑩ 能耗·健康度；垛型三视图等距自绘/真3D/俯视可切换）
+│  └─ vendor/                 内置 echarts@5.2.2 / echarts-gl@2.0.9（同源首选加载，
+│                             规避浏览器跟踪防护拦截与断网场景）【验收期新增】
 ├─ docs/
 │  ├─ HANDOVER_SHIFT2.md      班次2交接Prompt模板（存档）
 │  ├─ HANDOVER_SHIFT3.md      班次3交接Prompt模板（存档）

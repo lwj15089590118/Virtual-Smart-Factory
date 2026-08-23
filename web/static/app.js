@@ -338,6 +338,7 @@ let palletDomKind = '';          // DOM 载体现状：'' | 'iso' | 'echarts'（
 let pallet3DSig = '';            // 真3D 当前已渲染内容的签名（内容变化才 merge）
 let palletSavedCam = null;       // 真3D 交互后的相机参数（alpha/beta/distance），更新时回填防视角重置
 let lastPallet3DAt = 0;          // 上次真3D merge 的墙钟时刻（软渲染节流用）
+let pallet3DColumns = [];        // 真3D 聚合后的列数据（悬浮提示经 dataIndex 回查）
 
 /* 相机捕获：从 echarts 实例读回交互后的 viewControl（alpha/beta/distance），
    供真3D 重建时回填——否则每次 setOption 都会把视角打回默认值 */
@@ -358,10 +359,9 @@ function pallet3DBaseOption(cam) {
   return {
     tooltip: {
       formatter: (p) => {
-        const g = (cachedPallet && cachedPallet.grid) || [];
-        const b = g[p.dataIndex];
-        return b ? `${b.product_id}<br>格(x,y,z)=(${b.x},${b.y},${b.z})
-                   <br>物理(${b.px_mm},${b.py_mm},${b.pz_mm})mm` : '';
+        const c = pallet3DColumns[p.dataIndex];
+        return c ? `${c.top.product_id}（顶层）<br>格(列,行)=(${c.x},${c.y})
+                   <br>${c.layers} 层 · 高 ${c.layers * 180}mm` : '';
       },
     },
     // 修复记录：连续毫米轴 + barSize 数组在部分软渲染环境下不生效
@@ -380,7 +380,10 @@ function pallet3DBaseOption(cam) {
            : { viewControl: { distance: 260, alpha: 28, beta: 40 } }),
     series: [{
       type: 'bar3D', data: [],
-      // 不用半透明：透明混合会放大相邻柱共面接缝的闪烁（穿模观感来源之一）
+      // 修复记录：本环境对任何显式 barSize 都会生成针状坏网格（mm轴230与分类轴0.85
+      // 均实测为细针）——故不设置 barSize，采用自动满格；配合按列聚合消除嵌套后，
+      // 全场景无重叠几何，共面接缝在不透明渲染下不再可见。
+      // 不用半透明：透明混合会放大相邻柱接缝的闪烁（穿模观感来源之一）
       itemStyle: { opacity: 1 }, shading: 'color',
     }],
   };
@@ -557,11 +560,24 @@ function drawPalletFromCache() {
     charts.pallet.setOption({
       grid3D: { viewControl: Object.assign({}, palletSavedCam || {}) },
       series: [{
-        // 分类轴取值：[列x, 行y, 柱高=(z+1)*180mm]；悬浮提示经 dataIndex 回查毫米坐标
-        data: grid.map(b => ({
-          value: [String(b.x), String(b.y), (b.z + 1) * 180],
-          itemStyle: { color: PALLET_LAYER_COLORS[b.z % 4] },
-        })),
+        /* 穿模根治：原映射把同列多层箱画成多根从地面长起的嵌套柱（几何完全重叠、
+           侧壁共面→必然深度冲突）。现按 (列,行) 聚合为单柱，高度=最高层×180，
+           全场景无任何重叠/嵌套几何（柱体自动满格，不设 barSize）。 */
+        data: (() => {
+          const cols = new Map();
+          for (const b of grid) {
+            const k = b.x + ',' + b.y;
+            const prev = cols.get(k);
+            if (!prev || (b.z + 1) > prev.layers) {
+              cols.set(k, { x: b.x, y: b.y, layers: b.z + 1, top: b });
+            }
+          }
+          pallet3DColumns = [...cols.values()];
+          return pallet3DColumns.map(c => ({
+            value: [String(c.x), String(c.y), c.layers * 180],
+            itemStyle: { color: PALLET_LAYER_COLORS[(c.layers - 1) % 4] },
+          }));
+        })(),
       }],
     });                                          // 相机参数随更新一并回填
   } else {                                       // 'top' 俯视散点
