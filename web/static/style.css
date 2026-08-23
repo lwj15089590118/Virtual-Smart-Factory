@@ -161,6 +161,11 @@ body {
 .node[data-state="故障"] { border-color: var(--red);  animation: blink 1s infinite; }
 .node[data-state="维护"] { border-color: var(--blue); }
 .node.store { border-style: dashed; border-color: #37586f; }
+/* 修复记录：.store 的静态边框色会覆盖上面的状态色（同优先级后者胜），
+   出货口节点需要随出库活动着色，故补更高优先级规则 */
+.node.store[data-state="运行"] { border-color: var(--green); border-style: solid;
+  box-shadow: 0 0 10px rgba(0,230,118,.28) inset; }
+.node.store[data-state="待机"] { border-color: var(--amber); }
 .node.ng { border-color: var(--red); min-width: 110px; text-align: center;
            align-self: center; font-size: 12px; }
 .node.agvnode { border-color: #26c6da; }

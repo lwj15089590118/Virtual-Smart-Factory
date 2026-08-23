@@ -15,14 +15,18 @@ web/static/app.js —— SCADA 监控大屏前端逻辑（班次2）
 ====================================================================== */
 
 /* ---------------- 常量与全局 ---------------- */
+// 修复记录：echarts 核心与 echarts-gl 必须版本配对——gl 2.0.9 停更于 echarts 5.1~5.3 时代，
+// 配 5.5 时实测"grid3D 坐标盒正常但 bar3D 柱体静默不渲染"。降至社区稳配 5.2.2。
 const ECHARTS_CDNS = [
-  'https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js',
-  'https://cdn.bootcdn.net/ajax/libs/echarts/5.5.0/echarts.min.js',
-  'https://unpkg.com/echarts@5.5.0/dist/echarts.min.js',
+  'https://cdn.jsdelivr.net/npm/echarts@5.2.2/dist/echarts.min.js',
+  'https://cdn.bootcdn.net/ajax/libs/echarts/5.2.2/echarts.min.js',
+  'https://registry.npmmirror.com/echarts/5.2.2/files/dist/echarts.min.js',
+  'https://unpkg.com/echarts@5.2.2/dist/echarts.min.js',
 ];
+// 修复记录：bootcdn 的 echarts-gl@2.0.9 路径实测 404，替换为 npmmirror 源
 const GL_CDNS = [
   'https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js',
-  'https://cdn.bootcdn.net/ajax/libs/echarts-gl/2.0.9/echarts-gl.min.js',
+  'https://registry.npmmirror.com/echarts-gl/2.0.9/files/dist/echarts-gl.min.js',
   'https://unpkg.com/echarts-gl@2.0.9/dist/echarts-gl.min.js',
 ];
 const WS_PORT = 5081;                 // 与 config/settings.py SCADA_WS_PORT 一致
@@ -73,11 +77,23 @@ window.addEventListener('DOMContentLoaded', () => {
     refreshTrendFromCache();          // 立即画一版已缓存数据
     drawAgvFromCache();
     loadScripts(GL_CDNS).then((okGl) => {
-      glReady = okGl;
+      // 修复记录：脚本加载成功 ≠ 能用——bar3D 依赖 WebGL，远程桌面/虚拟机常无 GPU，
+      // WebGL 创建失败时 echarts-gl 会渲染空白。这里显式探测，不可用则锁定俯视降级模式。
+      glReady = okGl && webglSupported();
+      if (okGl && !glReady) toast('WebGL 不可用，垛型3D已降级为俯视图', true);
       drawPalletFromCache();          // gl 就绪后重画 3D
     });
   });
 });
+
+/* WebGL 可用性探测（bar3D 硬依赖；RDP/无GPU环境返回 false） */
+function webglSupported() {
+  try {
+    const c = document.createElement('canvas');
+    return !!(window.WebGLRenderingContext &&
+      (c.getContext('webgl') || c.getContext('experimental-webgl')));
+  } catch (e) { return false; }
+}
 
 /* ---------------- 脚本加载器（多 CDN 依次回退） ---------------- */
 function loadScript(src) {
@@ -139,6 +155,18 @@ function bindButtons() {
   // 班次3修改：MES 追溯查询按钮（回车同效）
   $('btnTrace').onclick     = runTrace;
   $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
+  // 垛型面板视图切换：等距(默认·零依赖) → 真3D → 俯视 → 循环
+  $('btnPalletView').onclick = () => {
+    const order = webglSupported() ? ['iso', '3d', 'top'] : ['iso', 'top'];
+    const next = order[(order.indexOf(palletViewMode) + 1) % order.length];
+    palletViewMode = next;
+    palletDrawnMode = '';
+    lastBoxesKey = '';              // 强制立即重绘
+    const nameMap = { iso: '等距自绘', '3d': '真3D(bar3D)', top: '俯视散点' };
+    $('btnPalletView').textContent = `视图: ${nameMap[next]}`;
+    drawPalletFromCache();
+    toast(`垛型已切换为${nameMap[next]}视图`);
+  };
   $('speedSel').onchange    = (e) => sendCommand('set_speed', { speed: Number(e.target.value) });
   $('levelSel').onchange    = () => { lastLocationsJson = ''; pollLocations(); };
 }
@@ -198,12 +226,14 @@ function renderFlow(units, fleet, injector) {
   const ngEl = $('nodeRework');
   ngEl.style.borderColor = v.rework_len > 0 ? '#ff5252' : '#37586f';
   $('reworkNum').textContent = v.rework_len;
-  // 出货口
+  // 出货口与AGV（增强：显示当前垛进度，解释车队"间歇待命"是正常节拍；
+  // 出货口节点随出库活动着色——有托盘待运/在途=运行绿，有出厂记录=待机黄）
   if (fleet) {
     $('agvBrief').textContent =
-      `待派 ${fleet.pending} · 执行 ${fleet.active} · 完成 ${fleet.done['入库'] || 0}入/${fleet.done['出库'] || 0}出`;
+      `待派 ${fleet.pending} · 执行 ${fleet.active} · 完成 ${fleet.done['入库'] || 0}入/${fleet.done['出库'] || 0}出 · 当前垛${p.current_fill}`;
     const busy = fleet.pending + fleet.active;
     setNode('nodeAgv', busy > 0 ? '运行' : '待机');
+    setNode('nodeShip', w.staging > 0 ? '运行' : (fleet.shipped > 0 ? '待机' : '停止'));
     $('shipNum').textContent = `已出厂 ${fleet.shipped} 托`;
   }
   // 生效中故障提示：把对应节点打上故障色（设备本身 state 已含故障）
@@ -285,46 +315,199 @@ async function pollPallet() {
     `当前垛 ${d.current_pallet_id} · ${d.grid.length}/${d.capacity}`;
   drawPalletFromCache();
 }
+/* ---------------- 垛型 3D/俯视（重建循环修复版） ----------------
+   修复记录：原实现每次数据变化都 clear()+整段 setOption 重建 GL 场景——
+   在软件渲染 WebGL（RDP/无GPU 环境）下单次重建耗时超过轮询间隔，
+   画面长期停在未完成帧（看似空白）；只有垛满清零的空场景能瞬间画完，
+   于是表现为"仅垛满时短暂出现坐标盒"；且每秒 clear() 持续打断视角，
+   导致完全无法拖拽旋转。
+   现改为 echarts 标准用法：
+     a) 坐标轴/grid3D 等"静态骨架"只在模式切换(3d/2d)时设置一次；
+     b) 数据更新只 merge series.data —— 不 clear、不重置视角，交互可保留；
+     c) 3D 更新做 1.2s 节流，慢渲染环境下不再被高频重建淹没。 */
+let palletDrawnMode = '';        // echarts 已绘制骨架标记：'' | '3d' | 'top'
+let palletViewMode = 'iso';      // 面板④视图：'iso'(等距自绘,默认·零依赖) | '3d'(bar3D) | 'top'(俯视)
+let palletIsoCanvas = null;      // 等距模式的自绘画布（纯 canvas 2D，任何环境必然可渲染）
+let lastPalletDrawAt = 0;        // 上次 bar3D 绘制墙钟时刻（节流用）
+
+function pallet3DBaseOption() {
+  const axLabel = { textStyle: { color: '#7fa3bf', fontSize: 11 } };
+  return {
+    tooltip: {
+      formatter: (p) => {
+        const g = (cachedPallet && cachedPallet.grid) || [];
+        const b = g[p.dataIndex];
+        return b ? `${b.product_id}<br>格(x,y,z)=(${b.x},${b.y},${b.z})
+                   <br>物理(${b.px_mm},${b.py_mm},${b.pz_mm})mm` : '';
+      },
+    },
+    xAxis3D: { name: 'X(mm)', min: -400, max: 400, axisLabel: axLabel },
+    yAxis3D: { name: 'Y(mm)', min: -550, max: 550, axisLabel: axLabel },
+    zAxis3D: { name: 'Z(mm)', min: 0, max: 800, axisLabel: axLabel },
+    grid3D: {
+      boxWidth: 90, boxDepth: 120, boxHeight: 90,
+      light: { main: { intensity: 1.1 }, ambient: { intensity: .35 } },
+      viewControl: { distance: 420, alpha: 28, beta: 40 },
+    },
+    series: [{
+      type: 'bar3D', data: [], barSize: [230, 230],
+      // 修复记录：shading 用 'color'（纯色、零光照依赖）——lambert 依赖光照法线计算，
+      // 在软渲染/版本边缘组合下可能整面发黑或不可见；'color' 保证柱面必然上色。
+      itemStyle: { opacity: .95 }, shading: 'color',
+    }],
+  };
+}
+
+/* ---- 等距投影自绘（面板④默认视图）：纯 canvas 2D，零 GL 依赖，任何环境必然可渲染。
+   修复记录：bar3D 在用户环境（软渲染 WebGL）下网格静默不渲染——坐标盒/交互正常但
+   柱体消失，换版本/换着色均无效。故默认改用自绘等距立方体：按 (x+y+z) 画家算法
+   排序、顶/右/左三面明暗着色，视觉等效 3D 且与已验证可用的俯视散点同技术底座。 ---- */
+const PALLET_LAYER_COLORS = ['#63b3ff', '#27d68f', '#ffd54f', '#ff9f43'];
+
+function shadeHex(hex, f) {
+  // 颜色明暗缩放：f>1 变亮，f<1 变暗（用于立方体三个面的伪光照）
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v) => Math.max(0, Math.min(255, Math.round(v * f)));
+  const r = ch((n >> 16) & 255), g = ch((n >> 8) & 255), b = ch(n & 255);
+  return `rgb(${r},${g},${b})`;
+}
+
+function ensurePalletIsoCanvas() {
+  if (charts.pallet) { charts.pallet.dispose(); charts.pallet = null; }
+  if (!palletIsoCanvas) {
+    palletIsoCanvas = document.createElement('canvas');
+    palletIsoCanvas.style.width = '100%';
+    palletIsoCanvas.style.height = '100%';
+  }
+  const host = $('chartPallet');
+  if (palletIsoCanvas.parentNode !== host) host.appendChild(palletIsoCanvas);
+}
+
+function leavePalletIsoCanvas() {
+  if (palletIsoCanvas && palletIsoCanvas.parentNode) palletIsoCanvas.remove();
+  if (!charts.pallet) {
+    charts.pallet = echarts.init($('chartPallet'));
+    palletDrawnMode = '';       // 重新初始化后骨架需重设
+  }
+}
+
+function drawPalletIsoCanvas(grid) {
+  ensurePalletIsoCanvas();
+  const cv = palletIsoCanvas;
+  const host = $('chartPallet');
+  const W = host.clientWidth || 300, H = host.clientHeight || 220;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const dims = (cachedPallet && cachedPallet.dims) || [3, 4, 4];
+  const DX = dims[0], DY = dims[1], DZ = dims[2];
+  // 等距基向量：x轴右下、y轴左下、z轴垂直向上；a 为单格屏幕尺寸（自动适配容器）
+  const a = Math.min(W * 0.86 / Math.max(DX + DY - 2, 1),
+                     H * 0.88 / ((DX + DY - 2) * 0.5 + DZ * 0.75));
+  const bx = a, by = a * 0.5, cz = a * 0.75;
+  const ox = W * 0.5 - (DX - DY) * a / 2;                // 水平居中（足迹中心对齐）
+  const oy = H * 0.94;
+  const proj = (x, y, z) => [ox + (x - y) * bx,
+                             oy - (x + y) * by - z * cz];
+
+  // 底座平台（垛型足迹），空垛时也有内容可见
+  ctx.beginPath();
+  let p00 = proj(-0.06, -0.06, 0), p10 = proj(DX + 0.06, -0.06, 0),
+      p11 = proj(DX + 0.06, DY + 0.06, 0), p01 = proj(-0.06, DY + 0.06, 0);
+  ctx.moveTo(p00[0], p00[1]); ctx.lineTo(p10[0], p10[1]);
+  ctx.lineTo(p11[0], p11[1]); ctx.lineTo(p01[0], p01[1]); ctx.closePath();
+  ctx.fillStyle = '#123049'; ctx.fill();
+  ctx.strokeStyle = '#1d3247'; ctx.stroke();
+
+  // 立方体按画家算法排序：远(小 x+y+z)先画
+  const cells = [...grid].sort((u, v) => (u.x + u.y + u.z) - (v.x + v.y + v.z));
+  for (const b of cells) {
+    const col = PALLET_LAYER_COLORS[b.z % PALLET_LAYER_COLORS.length];
+    const t0 = proj(b.x, b.y, b.z + 1);          // 顶面四角
+    const tx = proj(b.x + 1, b.y, b.z + 1);
+    const ty = proj(b.x, b.y + 1, b.z + 1);
+    const txy = proj(b.x + 1, b.y + 1, b.z + 1);
+    const rX = proj(b.x + 1, b.y, b.z);          // +x 面(右)
+    const rXY = proj(b.x + 1, b.y + 1, b.z);
+    const yY = proj(b.x, b.y + 1, b.z);          // +y 面(左)
+    // 右面(+x)：t0-tx-txy? 可见面为 tx-tyx 竖直四边形 tx,t0? 取 tx→txy底…
+    // 右面四边形: top(tx)-top(txy)-bot(rXY)-bot(rX)
+    ctx.beginPath();
+    ctx.moveTo(tx[0], tx[1]); ctx.lineTo(txy[0], txy[1]);
+    ctx.lineTo(rXY[0], rXY[1]); ctx.lineTo(rX[0], rX[1]); ctx.closePath();
+    ctx.fillStyle = shadeHex(col, 0.62); ctx.fill();
+    ctx.strokeStyle = 'rgba(11,22,32,.55)'; ctx.lineWidth = 1; ctx.stroke();
+    // 左面(+y): top(ty)-top(txy)-bot(rXY)-bot(yY)
+    ctx.beginPath();
+    ctx.moveTo(ty[0], ty[1]); ctx.lineTo(txy[0], txy[1]);
+    ctx.lineTo(rXY[0], rXY[1]); ctx.lineTo(yY[0], yY[1]); ctx.closePath();
+    ctx.fillStyle = shadeHex(col, 0.42); ctx.fill(); ctx.stroke();
+    // 顶面
+    ctx.beginPath();
+    ctx.moveTo(t0[0], t0[1]); ctx.lineTo(tx[0], tx[1]);
+    ctx.lineTo(txy[0], txy[1]); ctx.lineTo(ty[0], ty[1]); ctx.closePath();
+    ctx.fillStyle = shadeHex(col, 1.18); ctx.fill(); ctx.stroke();
+  }
+
+  if (!grid.length) {
+    ctx.fillStyle = '#7fa3bf'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('等待码箱…（等距视图 · canvas 自绘）', W / 2, H * 0.16);
+  }
+}
+
+/* 视图模式切换：确保 DOM 载体（自绘画布 vs echarts 实例）与目标模式匹配 */
+function setPalletDomMode(mode) {
+  if (mode === 'iso') ensurePalletIsoCanvas();
+  else leavePalletIsoCanvas();
+}
+
 function drawPalletFromCache() {
   if (!cachedPallet) return;
   const grid = cachedPallet.grid;
   const key = grid.length + '@' + cachedPallet.current_pallet_id;
   if (key === lastBoxesKey) return;
-  lastBoxesKey = key;
-  if (!charts.pallet) return;
 
-  if (glReady) {
-    // ---- 3D 模式：bar3D，坐标直接用 BOX_PLACED 的毫米坐标 ----
-    const data = grid.map(b => [b.px_mm, b.py_mm, b.pz_mm, 1]);
-    charts.pallet.clear();
+  if (palletViewMode === 'iso') {                // 默认：canvas 自绘等距图
+    setPalletDomMode('iso');
+    lastBoxesKey = key;
+    drawPalletIsoCanvas(grid);
+    return;
+  }
+
+  if (!charts.pallet) return;
+  if (palletViewMode === '3d') {
+    const nowMs = Date.now();
+    if (nowMs - lastPalletDrawAt < 1200) return; // bar3D 更新节流
+    lastPalletDrawAt = nowMs;
+  }
+  lastBoxesKey = key;
+  setPalletDomMode(palletViewMode);
+
+  if (palletViewMode === '3d') {
+    if (palletDrawnMode !== '3d') {
+      charts.pallet.clear();
+      charts.pallet.setOption(pallet3DBaseOption());
+      palletDrawnMode = '3d';
+    }
     charts.pallet.setOption({
-      tooltip: {
-        formatter: (p) => {
-          const b = grid[p.dataIndex];
-          return b ? `${b.product_id}<br>格(x,y,z)=(${b.x},${b.y},${b.z})
-                     <br>物理(${b.px_mm},${b.py_mm},${b.pz_mm})mm` : '';
-        },
-      },
-      xAxis3D: { name: 'X(mm)', min: -400, max: 400 },
-      yAxis3D: { name: 'Y(mm)', min: -550, max: 550 },
-      zAxis3D: { name: 'Z(mm)', min: 0, max: 800 },
-      grid3D: {
-        boxWidth: 90, boxDepth: 120, boxHeight: 90,
-        light: { main: { intensity: 1.1 }, ambient: { intensity: .35 } },
-        viewControl: { distance: 420, alpha: 28, beta: 40 },
-      },
       series: [{
-        type: 'bar3D', data: data,
-        barSize: 3.2,
-        itemStyle: { color: '#27d68f', opacity: .95 },
-        shading: 'lambert',
+        data: grid.map(b => ({
+          value: [b.px_mm, b.py_mm, b.pz_mm, (b.z + 1) * 180],
+          itemStyle: { color: PALLET_LAYER_COLORS[b.z % 4] },
+        })),
       }],
-    });
-  } else if (charts.pallet) {
-    // ---- 降级模式（gl 未就绪）：俯视散点，颜色=层数 ----
-    charts.pallet.clear();
+    });                                          // 只 merge 数据：不清屏、不动视角
+  } else {                                       // 'top' 俯视散点
+    if (palletDrawnMode !== 'top') {
+      charts.pallet.clear();
+      palletDrawnMode = 'top';
+    }
     charts.pallet.setOption({
-      title: { text: '俯视图（3D组件加载中）', left: 'center', textStyle: { color: '#7fa3bf', fontSize: 11 } },
+      title: { text: '俯视图', left: 'center',
+               textStyle: { color: '#7fa3bf', fontSize: 11 } },
       tooltip: { formatter: (p) => {
         const b = grid[p.dataIndex];
         return b ? `${b.product_id}<br>层Z=${b.z} 格=(${b.x},${b.y})` : ''; } },
@@ -334,7 +517,7 @@ function drawPalletFromCache() {
         type: 'scatter', symbolSize: 26,
         data: grid.map(b => ({
           value: [b.px_mm, b.py_mm],
-          itemStyle: { color: ['#63b3ff', '#27d68f', '#ffd54f', '#ff9f43'][b.z % 4] },
+          itemStyle: { color: PALLET_LAYER_COLORS[b.z % 4] },
         })),
       }],
     });
@@ -505,8 +688,8 @@ function initCharts() {
     }],
   });
 
-  /* ---- ④ 垛型（先建实例；gl 就绪后由 drawPalletFromCache 切3D）---- */
-  charts.pallet = echarts.init($('chartPallet'));
+  /* ---- ④ 垛型：默认等距自绘(canvas)不占 echarts 实例；
+         切到 真3D/俯视 时由 setPalletDomMode 按需初始化 ---- */
 
   /* ---- ⑤ 库位热力图（4排×10列）---- */
   charts.heat = echarts.init($('chartHeat'));
@@ -597,6 +780,8 @@ function initCharts() {
 
   window.addEventListener('resize', () => {
     for (const c of Object.values(charts)) c && c.resize();
+    // 等距自绘画布随容器尺寸重投影
+    if (palletViewMode === 'iso' && cachedPallet) drawPalletIsoCanvas(cachedPallet.grid);
   });
 }
 
