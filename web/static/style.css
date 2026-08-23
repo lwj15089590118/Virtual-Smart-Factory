@@ -202,3 +202,37 @@ td.t-error   { color: var(--red); }
   padding: 8px 0 14px;
 }
 .foot b { color: var(--amber); }
+
+/* ============ 班次3修改：MES 工单面板 + 能耗/健康面板样式 ============ */
+.trace-input {
+  min-width: 200px; padding: 2px 8px; font-size: 12px;
+}
+.btn-mini { padding: 2px 10px; font-size: 11px; }
+.mes-wrap { padding: 8px 12px; height: 300px; overflow-y: auto; }
+.mes-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.mes-chip {
+  background: #14283c; border: 1px solid var(--panel-edge); border-radius: 6px;
+  padding: 4px 12px; font-size: 11px; color: var(--ink-dim);
+}
+.mes-chip b { color: var(--ink); font-family: Consolas, monospace; font-size: 15px;
+              margin-left: 4px; }
+.mes-chip b.good { color: var(--green); } .mes-chip b.warn { color: var(--amber); }
+.mestable { margin-bottom: 8px; }
+.mestable td:first-child { color: var(--accent); }
+.prog-mini { height: 4px; width: 90px; background: #0d1b2a; border-radius: 2px;
+             display: inline-block; vertical-align: middle; margin-right: 6px;
+             overflow: hidden; }
+.prog-mini i { display: block; height: 100%; background: var(--accent); }
+.wo-done { color: var(--grey); }
+.trace-result {
+  white-space: pre-wrap; word-break: break-all;
+  background: #0d1b2a; border: 1px dashed var(--panel-edge); border-radius: 5px;
+  padding: 8px 10px; font-size: 11px; line-height: 1.55;
+  color: #9fd0f5; max-height: 110px; overflow-y: auto;
+  font-family: Consolas, monospace;
+}
+.chart-sm { height: 170px; }
+.health-wrap { height: 118px; }
+.hscore-good { color: var(--green); font-weight: bold; }
+.hscore-mid  { color: var(--amber); font-weight: bold; }
+.hscore-bad  { color: var(--red);   font-weight: bold; }

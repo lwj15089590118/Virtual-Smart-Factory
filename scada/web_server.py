@@ -11,6 +11,12 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
        GET  /api/warehouse/locations    全库位表（热力图数据源，200 格）
        GET  /api/modbus/map             Modbus 保持寄存器映射表（点表文档化）
        POST /api/command {"cmd":...}    大屏按钮命令 → Plant 公开方法（带审计事件）
+       ---- 班次3修改：MES/EMS 扩展路由 ----
+       GET  /api/mes/orders             工单台账 + 报工报表（产量/良率/OEE 仿真验证值）
+       GET  /api/mes/batches            批次台账（?wo_id= 过滤）
+       GET  /api/mes/trace?query=       产品/托盘全链路追溯反查
+       GET  /api/ems/energy             全厂能耗快照（kWh/电费/CO₂ 仿真验证值）
+       GET  /api/ems/health             设备健康评分 + 维护建议
     2. WebSocket 推送（端口 settings.SCADA_WS_PORT，scada/ws_hub.py 实现）：
        订阅 EventBus 通配符 "*"，每条事件实时 JSON 群发给在线大屏；
     3. 静态页面：web/static/index.html + app.js + style.css（ECharts CDN）。
@@ -289,6 +295,59 @@ class ScadaWebServer:
             code = 200 if result.get("ok") else 400
             return jsonify(result), code
 
+        # ==============================================================
+        # 班次3修改：MES / EMS 扩展路由（沿用现有 jsonify+ok 字段风格）
+        # ==============================================================
+        @app.route("/api/mes/orders")
+        def api_mes_orders():
+            """工单台账 + 报工报表（MES 未启用时返回空台账而非报错）。"""
+            mes = getattr(plant, "mes", None)
+            if mes is None:
+                return jsonify({"ok": True, "enabled": False,
+                                "orders": [], "report": None})
+            return jsonify({"ok": True, "enabled": True,
+                            "orders": mes.snapshot_orders(),
+                            "report": mes.report()})
+
+        @app.route("/api/mes/batches")
+        def api_mes_batches():
+            """批次台账（可 ?wo_id= 过滤）。"""
+            mes = getattr(plant, "mes", None)
+            if mes is None:
+                return jsonify({"ok": True, "enabled": False, "batches": []})
+            wo_id = request.args.get("wo_id") or None
+            return jsonify({"ok": True, "enabled": True,
+                            "batches": mes.snapshot_batches(wo_id=wo_id)})
+
+        @app.route("/api/mes/trace")
+        def api_mes_trace():
+            """全链路追溯反查：?query=产品号或托盘号。"""
+            mes = getattr(plant, "mes", None)
+            query = request.args.get("query", "")
+            if mes is None:
+                return jsonify({"ok": False, "msg": "MES 引擎未启用"}), 400
+            hit = mes.trace(query)
+            if hit is None:
+                return jsonify({"ok": False,
+                                "msg": f"未找到与 '{query}' 相关的追溯记录"}), 404
+            return jsonify({"ok": True, **hit})
+
+        @app.route("/api/ems/energy")
+        def api_ems_energy():
+            """全厂能耗快照（kWh/电费/CO₂，仿真验证值）。"""
+            em = getattr(plant, "ems_energy", None)
+            if em is None:
+                return jsonify({"ok": True, "enabled": False, "devices": []})
+            return jsonify({"ok": True, "enabled": True, **em.snapshot()})
+
+        @app.route("/api/ems/health")
+        def api_ems_health():
+            """全厂健康评分（0~100 + 维护建议，仿真验证值）。"""
+            hm = getattr(plant, "ems_health", None)
+            if hm is None:
+                return jsonify({"ok": True, "enabled": False, "devices": []})
+            return jsonify({"ok": True, "enabled": True, **hm.snapshot()})
+
         # 兜底：未知 API 返回 JSON 404（避免前端拿到 HTML 报错难排查）
         @app.errorhandler(404)
         def not_found(_e):
@@ -326,7 +385,9 @@ if __name__ == "__main__":
             wt.sleep(0.2)
 
     for path in ("/api/kpi", "/api/events?n=10", "/api/pallet3d",
-                 "/api/warehouse/locations", "/api/modbus/map"):
+                 "/api/warehouse/locations", "/api/modbus/map",
+                 "/api/mes/orders", "/api/mes/batches",
+                 "/api/ems/energy", "/api/ems/health"):   # 班次3修改：新路由纳入冒烟
         with urllib.request.urlopen(base + path, timeout=3) as r:
             data = json.loads(r.read().decode("utf-8"))
             assert data.get("ok") is True, f"{path} 返回异常"
@@ -337,5 +398,5 @@ if __name__ == "__main__":
     with urllib.request.urlopen(req, timeout=3) as r:
         ret = json.loads(r.read().decode("utf-8"))
     assert ret.get("ok") is True, f"命令下发失败: {ret}"
-    print("[SCADA-Web 冒烟通过] REST 六端点 + 命令链路全部 200 (仿真验证值)")
+    print("[SCADA-Web 冒烟通过] REST 十端点 + 命令链路全部 200 (仿真验证值)")
     srv.stop()

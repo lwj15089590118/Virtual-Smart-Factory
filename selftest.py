@@ -7,7 +7,9 @@ selftest.py —— 全厂自检（逐模块自检 + 10 分钟加速联跑冒烟�
        （每项调用公开接口做行为断言，与各模块内置 __main__ 自检互补）；
     B. 系统级冒烟：用与 main.py 完全相同的 Plant 编排，fast 模式加速联跑
        600 仿真秒（=10 分钟），校验端到端物流守恒、事件落盘完整性；
-    C. 输出自检报告到 reports/selftest_report_*.txt 并打印结论。
+    C. 班次3修改：新增 C 组用例——视觉算法指标达标(C1) / MES 追溯闭环(C2) /
+       EMS 能耗与评分合理性(C3)；
+    D. 输出自检报告到 reports/selftest_report_*.txt 并打印结论。
 
 运行方式：
     python selftest.py                 # 全部检查 + 冒烟
@@ -422,6 +424,176 @@ def case_agv_loop() -> str:
 
 
 # ======================================================================
+# C. 班次3修改：新增用例 C1 视觉算法指标 / C2 MES 追溯闭环 / C3 EMS 合理性
+# ======================================================================
+def case_vision_algo() -> str:
+    """C1 视觉算法指标达标：三方 A/B 对照达标 + judge 注入后在线混淆矩阵自洽。"""
+    from vision.defect_generator import evaluate_classifiers
+    from vision.vision_upgrade import install_vision_upgrade
+
+    # ---- 1) 离线评估：规则法 vs 逻辑回归 vs 单类马氏（独立测试集口径）----
+    ev = evaluate_classifiers(seed=S.DEFAULT_SEED)
+    lr, rule = ev["logistic_regression"], ev["rule"]
+    assert lr["accuracy"] >= S.VISION_CLF_ACC_MIN, \
+        f"LR 准确率 {lr['accuracy']} 低于达标线 {S.VISION_CLF_ACC_MIN}"
+    assert lr["recall"] > rule["recall"] + 0.10, \
+        f"查全率优势未体现: LR={lr['recall']} vs 规则={rule['recall']}"
+    assert lr["f1"] > rule["f1"], "LR 综合 F1 不应低于规则法"
+    cm = lr["confusion"]
+    assert sum(cm.values()) == ev["test_n"], "混淆矩阵四要素之和应等于测试样本数"
+
+    # ---- 2) 在线注入：judge 覆写后全流程判定 + 记录明细回填 ----
+    clock = SimClock(dt=S.SIM_DT)
+    bus = EventBus(clock, persist=False)
+    vis = UnitVision(clock, bus, unit_id="VIS-C1",
+                     rng=np.random.default_rng(S.DEFAULT_SEED + 1))
+    algo = install_vision_upgrade(vis, seed=S.DEFAULT_SEED)
+    vis.start_up()
+    n = 200
+    for i in range(n):
+        vis.inbound.append(Product(f"C1{i:08d}", born_at=clock.now(), source_unit="T"))
+    clock.advance_ticks(int(n * S.VISION_INSPECT_TIME * 1.3 / S.SIM_DT),
+                        step_fn=vis.update)
+    judged = vis.ok_total + vis.ng_total
+    assert judged == n, f"注入后应全量判定{n}件: {judged}"
+    rec = vis.qc_records[-1]
+    assert {"algo", "clf_p_ng", "rule_result", "features"} <= set(rec), \
+        f"判定明细未回填进质检记录: {list(rec.keys())}"
+    om = algo.online_metrics()
+    assert om["n"] == n and sum(om["confusion"].values()) == n, "在线混淆矩阵账目不平"
+    assert om["clf_acc"] >= 0.90, f"在线准确率异常: {om['clf_acc']}"
+    ng_rate = vis.ng_rate()
+    return (f"离线: LR准确率{lr['accuracy']*100:.2f}%/查全{lr['recall']*100:.1f}% "
+            f"vs 规则{rule['accuracy']*100:.2f}%/{rule['recall']*100:.1f}%; "
+            f"在线{n}件: 准确率{om['clf_acc']*100:.1f}%, NG率{ng_rate*100:.1f}%"
+            f"(真值先验≈7%) (仿真验证值)")
+
+
+def case_mes_trace() -> str:
+    """C2 MES 追溯闭环：产品→托盘→批次→工单四级反查 + JSONL 回放重建一致。"""
+    from mes.jsonl_replay import replay_file
+
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    assert plant.mes is not None and len(plant.mes.orders) == 1, "应自动开立首张工单"
+    wo0 = plant.mes.orders[0]
+    # 直接向视觉待检队列灌 48 件（绕过装配慢节拍；判定→码垛→AGV→入库走真实编排）
+    for i in range(48):
+        plant.vision.inbound.append(
+            Product(f"C2{i:08d}", born_at=plant.clock.now(), source_unit="C2-T"))
+    # 48件×2.5s检测 + 码垛48×1.2s+5s输出 + AGV≈15s + 堆垛25s ≈ 220s，给 300s
+    plant.clock.run_until(plant.clock.now() + 300.0)
+
+    # ---- 断言1：报工台账（直灌48件 + 装配线并行产出若干件，故用下界断言）----
+    rep = plant.mes.report()
+    assert rep["judged"] >= 48, f"报工应≥48件: {rep['judged']}"
+    assert rep["ok"] + rep["ng"] == rep["judged"] and rep["oee_pct"] > 0
+    # ---- 断言2：满托追溯（四级反查）----
+    assert len(plant.palletizer.pallets_done) == 1, "应完成1托"
+    pallet_id = plant.palletizer.pallets_done[0]["pallet_id"]
+    tr = plant.mes.trace(pallet_id)
+    assert tr is not None and tr["kind"] == "托盘", "满托应能反查到"
+    chain = tr["chain"]
+    assert chain["wo_id"] == wo0.wo_id, f"托盘应归属首张工单: {chain['wo_id']}"
+    assert len(chain["products"]) == 48, "托盘下应有48件产品"
+    stages = [e[1] for e in chain["events"]]
+    assert "码垛完成" in stages and "入库上架" in stages, f"流转档案缺失: {stages}"
+    loc = plant.warehouse.locate(pallet_id)
+    assert loc is not None and tr["status"] == f"在库 {loc}"
+    # ---- 断言3：产品级反查 → 托盘 → 工单 ----
+    pid = chain["products"][0]
+    tp = plant.mes.trace(pid)
+    assert tp["kind"] == "产品" and tp["chain"]["pallet_id"] == pallet_id \
+        and tp["chain"]["wo_id"] == wo0.wo_id
+    # ---- 断言4：REST 命令模式手动开单（照抄班次2分发+审计，走 test_client 全链路）----
+    from scada.web_server import ScadaWebServer
+    srv = ScadaWebServer(plant)
+    client = srv.app.test_client()
+    rv = client.post("/api/command", json={"cmd": "mes_new_order",
+                                           "params": {"qty": 100}})
+    assert rv.status_code == 200 and rv.get_json()["ok"], \
+        f"手动开单失败: {rv.get_json()}"
+    assert len(plant.mes.orders) == 2, "应新开一张工单"
+    audit = plant.bus.replay(lambda e: e["type"] == EventTypes.UI_COMMAND
+                             and e["data"]["cmd"] == "mes_new_order")
+    assert audit, "开单命令未落 ui.command 审计"
+    srv.stop()
+    # ---- 断言5：JSONL 回放重建台账与在线一致（交付要求的数据源口径）----
+    plant.bus.close()
+    eng = replay_file(plant.bus.log_path)
+    assert eng.stat_ok == plant.mes.stat_ok and eng.stat_ng == plant.mes.stat_ng, \
+        f"回放报工不一致: {eng.stat_ok}/{eng.stat_ng} vs {plant.mes.stat_ok}/{plant.mes.stat_ng}"
+    rt = eng.trace(pallet_id)
+    assert rt is not None and rt["chain"]["wo_id"] == wo0.wo_id, "回放后追溯链路断裂"
+    return (f"48件全链路闭环: 报工OK{rep['ok']}/NG{rep['ng']}, OEE≈{rep['oee_pct']}%; "
+            f"{pallet_id} 归属 {wo0.wo_id}-{chain['batch_id']} 在库{loc}; "
+            f"JSONL回放重建一致 (仿真验证值)")
+
+
+def case_ems_energy_health() -> str:
+    """C3 EMS 能耗与评分合理性：kWh 积分单调、健康扣分方向正确、维护命令闭环。"""
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    assert plant.ems_energy is not None and plant.ems_health is not None
+
+    # ---- 断言1：能耗积分合理（运行段累计为正且随时间单调增加）----
+    plant.clock.run_until(60.0)
+    e1 = plant.ems_energy.snapshot()
+    assert e1["total_kwh"] > 0, "装配持续运行 60s 应有能耗累积"
+    asm1 = next(d for d in e1["devices"] if d["id"] == S.ASSEMBLY_ID)
+    expect_asm = S.EMS_POWER_KW["ASM-"]["运行"] * 60.0 / 3600.0
+    assert abs(asm1["kwh"] - expect_asm) < 0.02, \
+        f"装配 kWh 积分误差过大: {asm1['kwh']} vs {expect_asm:.4f}"
+    assert abs(e1["cost_yuan"] - e1["total_kwh"] * S.EMS_PRICE_YUAN_PER_KWH) < 0.01
+    plant.clock.run_until(120.0)
+    e2 = plant.ems_energy.snapshot()
+    assert e2["total_kwh"] > e1["total_kwh"], "能耗应随仿真时间单调增加"
+
+    # ---- 断言2：健康评分——无故障期近似满分（仅启停切换的微小扣分）----
+    h0 = plant.ems_health.snapshot()
+    assert all(dv["score"] >= 98.0 for dv in h0["devices"]), \
+        f"无故障期评分应≥98: {[(d['dev_id'], d['score']) for d in h0['devices']]}"
+    plant.trigger_line_estop()                        # 全线急停（需人工复位）
+    plant.clock.run_until(160.0)                      # 急停持续 40s
+    h1 = plant.ems_health.assess(S.ASSEMBLY_ID)
+    assert h1["score"] < 100.0, f"急停后评分应下降: {h1['score']}"
+    assert h1["faults"] >= 1 and h1["downtime_s"] >= 39.0, \
+        f"停机特征提取错误: {h1}"
+    assert len(h1["advice"]) >= 4, "必须给出维护建议文案"
+    # 人工复位急停后，用连续故障循环压低评分 → 跌破告警阈值(60) 触发告警
+    plant.reset_line()
+    asm_dev = plant.devices[S.ASSEMBLY_ID]
+    for k in range(4):
+        asm_dev.apply_fault("气压不足", origin="random")
+        plant.clock.run_until(plant.clock.now() + 10.0)
+        asm_dev.clear_fault("自检恢复")
+        plant.clock.run_until(plant.clock.now() + 10.0)
+    h2 = plant.ems_health.assess(S.ASSEMBLY_ID)
+    assert h2["faults"] >= 5, f"窗口内应累计≥5次故障: {h2['faults']}"
+    assert h2["score"] < S.HEALTH_ALERT_BELOW, \
+        f"连续故障应跌破告警阈值: {h2['score']}"
+    alerts = plant.bus.replay(lambda e: e["type"] == EventTypes.EMS_HEALTH_ALERT)
+    assert len(alerts) >= 1, "跌破告警阈值应发布 ems.health_alert"
+
+    # ---- 断言3：维护预留接口经 REST 命令模式触发（enter_maintenance）----
+    rv = plant.execute_command("ems_maintain", {"dev_id": S.VISION_ID})
+    assert rv["ok"], f"维护命令失败: {rv}"
+    assert plant.devices[S.VISION_ID].state == DeviceState.MAINTENANCE
+    rd = plant.execute_command("ems_maintain_done", {"dev_id": S.VISION_ID})
+    assert rd["ok"] and plant.devices[S.VISION_ID].state == DeviceState.STANDBY
+    maint = plant.bus.replay(lambda e: e["type"] == EventTypes.EMS_MAINTENANCE)
+    assert len(maint) >= 2, "维护进入/退出均应落审计事件"
+    return (f"60s装配能耗{asm1['kwh']}kWh(理论{expect_asm:.3f}), 总能耗单调增; "
+            f"急停40s后装配评分{h0['devices'][0]['score']}→{h1['score']}"
+            f"(停机{h1['downtime_s']}s), 连续故障后→{h2['score']}, "
+            f"告警{len(alerts)}条; 维护命令闭环OK (仿真验证值)")
+
+
+# ======================================================================
 # B1. 系统级冒烟：600 仿真秒加速联跑（与 main.py 同一编排路径，班次2延续）
 # ======================================================================
 def smoke_full_plant(duration: float = S.DEFAULT_RUN_SECONDS) -> str:
@@ -500,13 +672,16 @@ def write_report(smoke_detail: str, report_path: str) -> None:
     total = len(RESULTS)
     lines = [
         "=" * 78,
-        "Virtual-Smart-Factory 班次2 全厂自检报告（班次2修改：新增B2/B3用例）",
+        "Virtual-Smart-Factory 班次3 全厂自检报告（班次3修改：新增C组用例）",
         f"生成时间: {datetime.now().isoformat(timespec='seconds')}",
         f"环境: Python {sys.version.split()[0]} @ Windows | "
         f"依赖: numpy/flask/pymodbus(标准库+numpy+flask+pymodbus 本班次实际使用)",
         f"配置: dt={S.SIM_DT}s | 默认倍率{S.DEFAULT_SPEED}x | 种子{S.DEFAULT_SEED}"
         f" | AGV车队{S.AGV_COUNT}台 | SCADA:{S.SCADA_HTTP_PORT}/WS:{S.SCADA_WS_PORT}"
         f"/Modbus:{S.MODBUS_TCP_PORT}",
+        f"班次3扩展: 视觉算法{'启用' if S.VISION_ALGO_ENABLE else '关闭'}"
+        f"({S.VISION_TRAIN_N}样本训练) | MES追溯上限{S.MES_TRACE_MAX}"
+        f" | 健康窗口{S.HEALTH_WINDOW_S:.0f}s",
         "=" * 78,
         "",
         "[一] 用例结果",
@@ -528,7 +703,7 @@ def main() -> int:
     os.makedirs(S.REPORT_DIR, exist_ok=True)
 
     print("=" * 78)
-    print("Virtual-Smart-Factory 班次2 全厂自检开始（逐模块 → Web/AGV → 10分钟加速冒烟）")
+    print("Virtual-Smart-Factory 班次3 全厂自检开始（A模块 → B Web/AGV/冒烟 → C 算法/MES/EMS）")
     print("=" * 78)
 
     run_case("A1", "仿真时钟引擎", case_clock)
@@ -546,6 +721,13 @@ def main() -> int:
         run_case("B2", "Web API 冒烟(REST/命令/映射)", case_web_api)
         print("\n[B3] AGV 任务闭环：满托 agv.call → 车队搬运 → 入库 → 出库出厂…")
         run_case("B3", "AGV 任务闭环(入库+出库)", case_agv_loop)
+        # ---- 班次3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性）----
+        print("\n[C1] 视觉算法指标：三方 A/B 对照达标 + judge 注入在线混淆矩阵…")
+        run_case("C1", "视觉算法指标达标(A/B对照)", case_vision_algo)
+        print("\n[C2] MES 追溯闭环：四级反查 + 手动开单 + JSONL 回放重建…")
+        run_case("C2", "MES 追溯闭环(产品→托盘→库位)", case_mes_trace)
+        print("\n[C3] EMS 合理性：能耗积分单调 + 健康扣分方向 + 维护命令闭环…")
+        run_case("C3", "EMS 能耗/健康评分合理性", case_ems_energy_health)
         print("\n[B1] 系统级冒烟：fast 加速联跑 600 仿真秒（≈真实产线10分钟）…")
         try:
             smoke_detail = smoke_full_plant()

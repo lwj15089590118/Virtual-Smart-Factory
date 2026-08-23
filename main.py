@@ -103,6 +103,11 @@ class Plant:
         self._next_report_at = S.STATUS_PERIOD
         # ---- 全厂急停标志 ----
         self.line_estop_latched = False
+        # ---- 班次3修改：扩展子系统占位（build() 时在 _install_extension_hooks 装配）----
+        self.vision_algo = None      # 视觉算法升级包句柄（None=仍为规则法）
+        self.mes = None              # MES 引擎（工单/追溯/报工）
+        self.ems_energy = None       # EMS 能耗模型
+        self.ems_health = None       # EMS 健康监视器
 
     @property
     def _agv_transit(self) -> List[str]:
@@ -148,11 +153,31 @@ class Plant:
                  由 run(enable_web=True) / main.py --web 启动；
         [班次2✔] Modbus TCP 从站：scada/modbus_server.py（io_table→保持寄存器）；
         [班次2✔] 真实 AGV 调度：agv/agv_fleet.py 替换占位搬运；
-        [班次3] 视觉算法：覆写 UnitVision.judge()；
-        [班次3] MES/EMS：订阅 EventTypes.FAULT_RAISED / DEVICE_STATE 提取特征，
-                或直接读 JSONL 事件日志（logs/events_*.jsonl）。
+        [班次3✔] 视觉算法：vision/vision_upgrade.py 注入覆写 UnitVision.judge()
+                 （保留规则法做 A/B 对照；--rule-vision 可退回规则法回归对照）；
+        [班次3✔] MES：mes/mes_engine.py 订阅事件总线自动报工/追溯/OEE；
+        [班次3✔] EMS：ems/energy_model.py 能耗积分 + ems/health_monitor.py 健康评分，
+                 均只订阅 EventTypes 事件，不侵入仿真内核。
         """
-        pass
+        # ---- 班次3修改：视觉算法升级包注入（实例级覆写 judge，原类零改动）----
+        if S.VISION_ALGO_ENABLE:
+            from vision.vision_upgrade import install_vision_upgrade
+            self.vision_algo = install_vision_upgrade(self.vision, seed=self.seed)
+            print(f"[班次3 视觉] 判定算法已注入: {self.vision_algo.ALGO_ID} "
+                  f"(训练准确率{self.vision_algo.train_metrics['accuracy'] * 100:.1f}%"
+                  f"/查全{self.vision_algo.train_metrics['recall'] * 100:.1f}%，仿真验证值)")
+        # ---- 班次3修改：MES 引擎（订阅 "*" 自动建档报工）----
+        if S.MES_ENGINE_ENABLE:
+            from mes.mes_engine import MESEngine
+            self.mes = MESEngine(self)
+            print(f"[班次3 MES] 引擎已挂接，首张工单 {self.mes.orders[0].wo_id}"
+                  f"(计划{self.mes.orders[0].target_qty}件)")
+        # ---- 班次3修改：EMS 能耗模型 + 健康监视器（纯事件驱动，零内核侵入）----
+        from ems.energy_model import EnergyModel
+        from ems.health_monitor import HealthMonitor
+        self.ems_energy = EnergyModel(self)
+        self.ems_health = HealthMonitor(self)
+        print("[班次3 EMS] 能耗模型与健康监视器已订阅事件总线")
 
     # ==================================================================
     # 每 tick 全厂步进（顺序即物料流向，先注入故障再让设备响应）
@@ -295,6 +320,30 @@ class Plant:
                 msg = (f"出库申请已受理：{pid or 'FIFO最早托'}（车队将自动建档运输）"
                        if ok else "出库申请被拒绝（托不在库或请求积压）")
                 return {"ok": bool(ok), "msg": msg}
+            # ---- 班次3修改：MES/EMS 命令（沿用班次2 REST 命令分发模式）----
+            if cmd == "mes_new_order":              # 手动开立工单（qty/model 可选）
+                if getattr(self, "mes", None) is None:
+                    return {"ok": False, "msg": "MES 引擎未启用"}
+                try:
+                    qty = int(params.get("qty") or S.MES_DEFAULT_ORDER_QTY)
+                except (TypeError, ValueError):
+                    return {"ok": False, "msg": "计划数量须为正整数"}
+                model = str(params.get("model") or S.MES_PRODUCT_MODEL)
+                if qty <= 0 or qty > 100000:
+                    return {"ok": False, "msg": "计划数量须为正数且不超过10万"}
+                wo = self.mes.create_order(qty, model)
+                return {"ok": True,
+                        "msg": f"工单已开立: {wo.wo_id} 型号{model} 计划{qty}件"}
+            if cmd == "ems_maintain":               # 健康 → 进入维护
+                if getattr(self, "ems_health", None) is None:
+                    return {"ok": False, "msg": "EMS 健康模块未启用"}
+                dev_id = str(params.get("dev_id", ""))
+                return self.ems_health.apply_maintenance(dev_id, reason="大屏命令下发")
+            if cmd == "ems_maintain_done":          # 维护完成 → 待机
+                if getattr(self, "ems_health", None) is None:
+                    return {"ok": False, "msg": "EMS 健康模块未启用"}
+                dev_id = str(params.get("dev_id", ""))
+                return self.ems_health.exit_maintenance(dev_id)
             return {"ok": False, "msg": f"未知命令: {cmd}"}
         except Exception as exc:                    # 命令层兜底：异常不炸 Web 线程
             return {"ok": False, "msg": f"命令执行异常: {exc.__class__.__name__}: {exc}"}
@@ -358,6 +407,23 @@ class Plant:
         """停机：停时钟、关总线、打终报。"""
         self.clock.stop()
         self.print_status(force=True, final=True)
+        # 班次3修改：终报追加 MES 报工摘要（仿真验证值）
+        if getattr(self, "mes", None) is not None:
+            rep = self.mes.report()
+            print(f"[MES 报工] 判定{rep['judged']}件(OK{rep['ok']}/NG{rep['ng']}) "
+                  f"良率{rep['quality_pct']}% | 可用{rep['availability_pct']}% "
+                  f"性能{rep['performance_pct']}% OEE≈{rep['oee_pct']}% | "
+                  f"工单{len(self.mes.orders)}张 满托{rep['pallets_done']} 出厂{rep['shipped']}")
+        # 班次3修改：终报追加 EMS 能耗/健康摘要（均为仿真验证值）
+        if getattr(self, "ems_energy", None) is not None:
+            es = self.ems_energy.snapshot()
+            hs = self.ems_health.snapshot()
+            print(f"[EMS 能耗] 全厂 {es['total_kwh']}kWh · 电费≈{es['cost_yuan']}元 "
+                  f"· CO₂≈{es['co2_kg']}kg")
+            worst = next((d for d in hs["devices"] if d["dev_id"] == hs["worst"]), None)
+            print(f"[EMS 健康] 平均健康分 {hs['avg_score']} / 100，最差设备: "
+                  f"{worst['dev_id']}({worst['score']}分·{worst['advice']})"
+                  if worst else "[EMS 健康] 无设备数据")
         self.bus.close()
         print(f"[事件日志] {len(self.bus.recent(10**6))} 条缓冲 / "
               f"共 {self.bus.total_published} 条已发布 → {self.bus.log_path}")
@@ -417,6 +483,9 @@ def parse_args() -> argparse.Namespace:
                         help="启动 SCADA 大屏(REST+WebSocket) 与 Modbus TCP 从站（演示推荐 --speed 1）")
     parser.add_argument("--no-agv", action="store_true",
                         help="关闭 AGV 车队（退回班次1占位搬运，用于回归对照）")
+    # ---- 班次3修改：视觉算法回归对照开关 ----
+    parser.add_argument("--rule-vision", action="store_true",
+                        help="关闭班次3视觉算法注入（退回班次1规则法判定，用于 A/B 回归对照）")
     return parser.parse_args()
 
 
@@ -428,6 +497,9 @@ def main() -> None:
     duration = args.duration
     if duration is None:
         duration = None if args.web else S.DEFAULT_RUN_SECONDS
+    # 班次3修改：--rule-vision 临时关闭算法注入（优先级高于配置中心开关）
+    if args.rule_vision:
+        S.VISION_ALGO_ENABLE = False
     plant = Plant(speed=args.speed, mode=mode, seed=args.seed,
                   enable_random_faults=not args.no_random_faults,
                   enable_agv=not args.no_agv)

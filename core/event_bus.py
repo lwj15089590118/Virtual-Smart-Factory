@@ -47,6 +47,12 @@ class EventTypes:
     AGV_TASK_DONE = "agv.task_done"        # AGV 任务闭环完成（入库交付库口/出库送达出货口）
     UI_COMMAND = "ui.command"              # 班次2：Web 大屏按钮命令审计（REST→Plant）
 
+    # ---- 班次3修改：追加 MES / EMS 事件类型（仍遵守"只在此处扩展"的约定）----
+    MES_ORDER_CREATED = "mes.order_created"  # 工单开立（含计划量，MES 报工数据源之一）
+    MES_ORDER_CLOSED = "mes.order_closed"    # 工单满单关闭（自动翻单前落一条审计）
+    EMS_HEALTH_ALERT = "ems.health_alert"    # 健康分跌破阈值告警（含评分与维护建议）
+    EMS_MAINTENANCE = "ems.maintenance"      # 维护动作执行审计（enter_maintenance 触发留痕）
+
 
 class EventBus:
     """进程内发布/订阅总线 + JSONL 落盘。"""

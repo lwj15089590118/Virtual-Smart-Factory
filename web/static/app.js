@@ -39,6 +39,9 @@ const EVT_LABEL = {
   'clock.pause': '时钟暂停', 'clock.resume': '时钟恢复',
   'assembly.door_hold': '门开保持', 'assembly.door_resume': '关门恢复',
   'ui.command': '大屏命令',
+  // 班次3修改：MES/EMS 事件中文名
+  'mes.order_created': '工单开立', 'mes.order_closed': '工单关单',
+  'ems.health_alert': '健康告警', 'ems.maintenance': '维护动作',
 };
 
 const charts = {};                    // echarts 实例集合
@@ -60,7 +63,10 @@ window.addEventListener('DOMContentLoaded', () => {
   setInterval(pollKpi, 2000);
   setInterval(pollPallet, 1000);
   setInterval(pollLocations, 3000);
-  pollStatus(); pollPallet(); pollLocations();
+  // 班次3修改：MES 工单面板(3s) 与 EMS 能耗/健康面板(2s) 轮询
+  setInterval(pollMes, 3000);
+  setInterval(pollEms, 2000);
+  pollStatus(); pollPallet(); pollLocations(); pollMes(); pollEms();
   loadScripts(ECHARTS_CDNS).then((ok) => {
     if (!ok) { toast('ECharts CDN 全部加载失败，图表降级为表格模式', true); return; }
     initCharts();
@@ -130,6 +136,9 @@ function bindButtons() {
   $('btnDoorClose').onclick = () => sendCommand('door_close');
   $('btnOutbound').onclick  = () => sendCommand('outbound');
   $('btnEstop').onclick     = () => sendCommand('estop');
+  // 班次3修改：MES 追溯查询按钮（回车同效）
+  $('btnTrace').onclick     = runTrace;
+  $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
   $('speedSel').onchange    = (e) => sendCommand('set_speed', { speed: Number(e.target.value) });
   $('levelSel').onchange    = () => { lastLocationsJson = ''; pollLocations(); };
 }
@@ -418,6 +427,11 @@ function summarize(ev) {
     case 'wh.inbound_done':   return `${d.pallet_id} 上架 ${d.loc_id}（在库${d.stock}）`;
     case 'wh.outbound_done':  return `${d.pallet_id} 下架（在库${d.stock}）`;
     case 'ui.command':        return `屏幕命令: ${d.cmd} ${JSON.stringify(d.params || {})}`;
+    // 班次3修改：MES/EMS 事件摘要
+    case 'mes.order_created': return `开立 ${d.wo_id} 型号${d.model} 计划${d.target_qty}件`;
+    case 'mes.order_closed':  return `${d.wo_id} 完工关单（OK${d.ok}/NG${d.ng}）`;
+    case 'ems.health_alert':  return `${d.dev_id} 健康分 ${d.score}：${d.advice}`;
+    case 'ems.maintenance':   return `${d.dev_id} 维护动作（${d.reason}）`;
     default:
       return Object.keys(d).length ? JSON.stringify(d) : '';
   }
@@ -555,6 +569,32 @@ function initCharts() {
     ],
   });
 
+  /* ---- ⑩ 能耗横向条形图（班次3修改：/api/ems/energy 数据源）---- */
+  charts.energy = echarts.init($('chartEnergy'));
+  charts.energy.setOption({
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'axis', axisPointer: { type: 'shadow' },
+      formatter: (ps) => {
+        const p = ps[0];
+        const d = energyCache.devices[p.dataIndex];
+        return d ? `${d.name}（${d.id}）<br>累计 ${d.kwh} kWh · 当前 ${d.kw_now} kW` : '';
+      },
+    },
+    grid: { left: 70, right: 46, top: 8, bottom: 20 },
+    xAxis: Object.assign({ type: 'value', name: 'kWh' }, axisStyle),
+    yAxis: Object.assign({ type: 'category',
+      data: [] }, axisStyle),
+    series: [{
+      type: 'bar', barWidth: 10,
+      itemStyle: { color: '#26c6da', borderRadius: 4,
+                   shadowBlur: 6, shadowColor: 'rgba(38,198,218,.5)' },
+      label: { show: true, position: 'right', color: '#7fa3bf', fontSize: 9,
+               formatter: (p) => `${p.value}` },
+      data: [],
+    }],
+  });
+
   window.addEventListener('resize', () => {
     for (const c of Object.values(charts)) c && c.resize();
   });
@@ -582,4 +622,104 @@ function drawAgvFromCache() {
   ]});
   $('agvMapSub').textContent =
     `${cachedFleet.agv_count} 台车 · 待派${cachedFleet.pending} · 执行${cachedFleet.active} · 已出厂${cachedFleet.shipped}托`;
+}
+
+/* =====================================================================
+   班次3修改：MES 工单面板（/api/mes/orders + /api/mes/trace）
+==================================================================== */
+let energyCache = { devices: [] };      // 能耗面板缓存（图表 tooltip 用）
+
+async function pollMes() {
+  let d;
+  try { d = await api('/api/mes/orders'); } catch (e) { return; }
+  if (!d.ok) return;
+  const rep = d.report;
+  // ---- 报工指标 chips ----
+  if (rep) {
+    $('mesChips').innerHTML = `
+      <span class="mes-chip">报工产量<b>${rep.judged}</b>件</span>
+      <span class="mes-chip">良品率<b class="${rep.quality_pct >= 95 ? 'good' : 'warn'}">${rep.quality_pct}%</b></span>
+      <span class="mes-chip">可用率<b>${rep.availability_pct}%</b></span>
+      <span class="mes-chip">性能率<b>${rep.performance_pct}%</b></span>
+      <span class="mes-chip">OEE≈<b class="${rep.oee_pct >= 60 ? 'good' : 'warn'}">${rep.oee_pct}%</b></span>
+      <span class="mes-chip">满托<b>${rep.pallets_done}</b>/出厂<b>${rep.shipped}</b>托</span>`;
+  }
+  // ---- 工单表 ----
+  $('mesOrderBody').innerHTML = (d.orders || []).map((o) => `
+    <tr>
+      <td>${o.wo_id}</td>
+      <td>${o.model}</td>
+      <td><span class="prog-mini"><i style="width:${o.progress_pct}%"></i></span>${o.total}/${o.target_qty}</td>
+      <td>${o.ok}/${o.ng}</td>
+      <td>${o.yield_pct}%</td>
+      <td class="${o.status === '已完成' ? 'wo-done' : ''}">${o.status}</td>
+    </tr>`).join('');
+}
+
+/* ---------------- 追溯查询 ---------------- */
+async function runTrace() {
+  const q = ($('traceInput').value || '').trim();
+  if (!q) { toast('请先输入产品号或托盘号', true); return; }
+  let d;
+  try {
+    d = await api('/api/mes/trace?query=' + encodeURIComponent(q));
+  } catch (e) { toast('追溯请求失败：' + e.message, true); return; }
+  const box = $('traceResult');
+  if (!d.ok) { box.textContent = `✘ ${d.msg}`; return; }
+  const c = d.chain;
+  const lines = [];
+  lines.push(`✔ 命中【${d.kind}】 当前状态: ${d.status}`);
+  if (d.kind === '产品') {
+    lines.push(`产品 ${c.product.product_id} → 质检 ${c.product.result || '?'} @ t=${(c.product.ts_sim ?? '-')}s`);
+    lines.push(`托盘 ${c.pallet_id} → 批次 ${c.batch_id || '?'} → 工单 ${c.wo_id || '?'}`);
+    lines.push(`库位: ${c.location || '（不在库）'}`);
+    for (const [ts, stage, note] of (c.pallet_events || [])) {
+      lines.push(`  t=${ts}s  ${stage}  ${note}`);
+    }
+  } else {
+    lines.push(`托盘 ${c.pallet_id} → 批次 ${c.batch_id || '?'} → 工单 ${c.wo_id || '?'}`);
+    lines.push(`产品清单(${(c.products || []).length}): ${(c.products || []).slice(0, 8).join(', ')}${(c.products || []).length > 8 ? ' …' : ''}`);
+    for (const [ts, stage, note] of (c.events || [])) {
+      lines.push(`  t=${ts}s  ${stage}  ${note}`);
+    }
+  }
+  box.textContent = lines.join('\n');
+}
+
+/* =====================================================================
+   班次3修改：EMS 能耗/健康面板（/api/ems/energy + /api/ems/health）
+==================================================================== */
+async function pollEms() {
+  await Promise.all([pollEnergy(), pollHealth()]);
+}
+
+async function pollEnergy() {
+  let d;
+  try { d = await api('/api/ems/energy'); } catch (e) { return; }
+  if (!d.ok) return;
+  energyCache = d;
+  if (!d.enabled) { $('emsSub').textContent = 'EMS 未启用'; return; }
+  $('emsSub').textContent =
+    `合计 ${d.total_kwh} kWh · 电费≈${d.cost_yuan}元 · CO₂≈${d.co2_kg}kg（仿真验证值）`;
+  if (charts.energy) {
+    const devs = [...(d.devices || [])].sort((a, b) => a.kwh - b.kwh);
+    charts.energy.setOption({
+      yAxis: { data: devs.map(x => `${x.id}`) },
+      series: [{ data: devs.map(x => x.kwh) }],
+    });
+  }
+}
+
+async function pollHealth() {
+  let d;
+  try { d = await api('/api/ems/health'); } catch (e) { return; }
+  if (!d.ok) return;
+  const cls = (s) => s >= 80 ? 'hscore-good' : (s >= 60 ? 'hscore-mid' : 'hscore-bad');
+  $('healthBody').innerHTML = (d.devices || []).map((x) => `
+    <tr>
+      <td>${x.dev_id} ${x.name}</td>
+      <td class="${cls(x.score)}">${x.score} ${x.grade}</td>
+      <td>${x.faults}次 / ${x.downtime_s}s</td>
+      <td>${x.advice}${x.state === '维护' ? '（维护中）' : ''}</td>
+    </tr>`).join('');
 }

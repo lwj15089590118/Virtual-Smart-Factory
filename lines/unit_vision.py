@@ -109,6 +109,11 @@ class UnitVision(DeviceBase):
 
         # ---- 检测完成：判定 + 分流 + 记录 ----
         result, dim = self.judge(self._current)
+        # 班次3修改：取走算法包(vision/vision_upgrade.py)暂存的判定明细，
+        # 并入质检记录与 vision.ok/ng 事件负载；规则法路径下该字段为 None，行为不变。
+        algo_detail = getattr(self, "last_judge_detail", None)
+        if hasattr(self, "last_judge_detail"):
+            self.last_judge_detail = None
         product = self._current
         product.qc_result = result
         product.qc_dim = dim
@@ -121,6 +126,8 @@ class UnitVision(DeviceBase):
             "nominal_mm": S.VISION_NOMINAL_DIM,
             "tol_mm": S.VISION_TOLERANCE,
         }
+        if algo_detail:
+            record.update(algo_detail)      # 班次3修改：A/B对照/概率/特征向量随事件落盘
         self.qc_records.append(record)
         self.cycle_count += 1
 
@@ -156,6 +163,9 @@ class UnitVision(DeviceBase):
             "queue_len": len(self.inbound),
             "rework_len": len(self.rework_lane),
         })
+        # 班次3修改：注入了升级算法时，导出算法档案（训练指标/在线混淆矩阵）
+        if getattr(self, "algo_info", None):
+            snap["algo"] = self.algo_info
         return snap
 
 
