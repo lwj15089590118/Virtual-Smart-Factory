@@ -432,8 +432,11 @@ function drawPalletIsoCanvas(grid) {
   ctx.fillStyle = '#123049'; ctx.fill();
   ctx.strokeStyle = '#1d3247'; ctx.stroke();
 
-  // 立方体按画家算法排序：远(小 x+y+z)先画
-  const cells = [...grid].sort((u, v) => (u.x + u.y + u.z) - (v.x + v.y + v.z));
+  // 立方体按画家算法排序（修复记录：原按 (x+y+z) 升序=近先远后，方向反了且 z 权重
+  // 错误，导致内部相邻箱体互相错盖——只有轮廓边缘与顶层幸存）。本投影视线方向
+  // d∝(1,1,-4/3)（由 b=a/2、c=0.75a 推得），深度键=x+y-1.5z，远(键大)者先画。
+  const cells = [...grid].sort((u, v) =>
+    (v.x + v.y - v.z * 1.5) - (u.x + u.y - u.z * 1.5));
   for (const b of cells) {
     const col = PALLET_LAYER_COLORS[b.z % PALLET_LAYER_COLORS.length];
     const t0 = proj(b.x, b.y, b.z + 1);          // 顶面·前角
@@ -477,8 +480,12 @@ function setPalletDomMode(mode) {
 
 function drawPalletFromCache() {
   if (!cachedPallet) return;
-  const grid = cachedPallet.grid;
-  const key = grid.length + '@' + cachedPallet.current_pallet_id;
+  // 满托换盘无缝衔接：当前垛清空(输出期)时改显示刚完成的垛档案，
+  // 消除"堆满一瞬间只剩空白盒"的观感断裂
+  const doneBoxes = (cachedPallet.last_completed && cachedPallet.last_completed.boxes) || [];
+  const grid = cachedPallet.grid.length ? cachedPallet.grid : doneBoxes;
+  const key = (cachedPallet.grid.length ? 'C' : 'D') + grid.length + '@'
+            + cachedPallet.current_pallet_id;
   if (key === lastBoxesKey) return;
 
   if (palletViewMode === 'iso') {                // 默认：canvas 自绘等距图
