@@ -17,7 +17,11 @@ web/static/app.js —— SCADA 监控大屏前端逻辑（班次2）
 /* ---------------- 常量与全局 ---------------- */
 // 修复记录：echarts 核心与 echarts-gl 必须版本配对——gl 2.0.9 停更于 echarts 5.1~5.3 时代，
 // 配 5.5 时实测"grid3D 坐标盒正常但 bar3D 柱体静默不渲染"。降至社区稳配 5.2.2。
+// 修复记录：Edge 跟踪防护会拦截 CDN echarts（F12 实证 → ReferenceError:
+// echarts is not defined），故首选同源本地 vendor 文件，CDN 全链降为备用；
+// 版本配对：gl 2.0.9 对应 echarts 5.1~5.3 时代，社区稳配 5.2.2。
 const ECHARTS_CDNS = [
+  '/static/vendor/echarts-5.2.2.min.js',
   'https://cdn.jsdelivr.net/npm/echarts@5.2.2/dist/echarts.min.js',
   'https://cdn.bootcdn.net/ajax/libs/echarts/5.2.2/echarts.min.js',
   'https://registry.npmmirror.com/echarts/5.2.2/files/dist/echarts.min.js',
@@ -25,6 +29,7 @@ const ECHARTS_CDNS = [
 ];
 // 修复记录：bootcdn 的 echarts-gl@2.0.9 路径实测 404，替换为 npmmirror 源
 const GL_CDNS = [
+  '/static/vendor/echarts-gl-2.0.9.min.js',
   'https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js',
   'https://registry.npmmirror.com/echarts-gl/2.0.9/files/dist/echarts-gl.min.js',
   'https://unpkg.com/echarts-gl@2.0.9/dist/echarts-gl.min.js',
@@ -374,8 +379,8 @@ function shadeHex(hex, f) {
 
 function ensurePalletIsoCanvas() {
   const host = $('chartPallet');
-  // 兜底：无论内部状态如何，先确保 echarts 实例彻底离开该容器
-  const inst = echarts.getInstanceByDom(host);
+  // 竞态修复：echarts 脚本可能尚未加载完成，此时不得访问全局 echarts 对象
+  const inst = (window.echarts ? echarts.getInstanceByDom(host) : null);
   if (inst) { inst.dispose(); charts.pallet = null; }
   if (!palletIsoCanvas) {
     palletIsoCanvas = document.createElement('canvas');
@@ -387,8 +392,9 @@ function ensurePalletIsoCanvas() {
 
 function leavePalletIsoCanvas() {
   if (palletIsoCanvas && palletIsoCanvas.parentNode) palletIsoCanvas.remove();
+  // 竞态修复：echarts 未就绪时只清画布、不建实例（等 loadScripts 完成后按需创建）
+  if (!window.echarts) { charts.pallet = null; return; }
   const host = $('chartPallet');
-  // 兜底：以 dom 上真实挂载的实例为准，杜绝双实例/残留画布混叠
   const inst = echarts.getInstanceByDom(host);
   if (!inst) charts.pallet = echarts.init(host);
   else charts.pallet = inst;
@@ -482,14 +488,15 @@ function drawPalletFromCache() {
     return;
   }
 
-  if (!charts.pallet) return;
+  // 先确保 DOM/实例与目标模式匹配（echarts 未就绪时保持空实例，不抛错）
+  setPalletDomMode(palletViewMode);
+  if (!charts.pallet) return;                    // echarts 尚未加载：键不落账，下轮重试
   if (palletViewMode === '3d') {
     const nowMs = Date.now();
     if (nowMs - lastPalletDrawAt < 1200) return; // bar3D 更新节流
     lastPalletDrawAt = nowMs;
   }
   lastBoxesKey = key;
-  setPalletDomMode(palletViewMode);
 
   if (palletViewMode === '3d') {
     if (palletDrawnMode !== '3d') {
