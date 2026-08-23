@@ -166,6 +166,7 @@ function bindButtons() {
     const next = order[(order.indexOf(palletViewMode) + 1) % order.length];
     palletViewMode = next;
     palletDrawnMode = '';
+    pallet3DSig = '';               // 手动切换后允许立即按新视图重建
     lastBoxesKey = '';              // 强制立即重绘
     const nameMap = { iso: '等距自绘', '3d': '真3D(bar3D)', top: '俯视散点' };
     $('btnPalletView').textContent = `视图: ${nameMap[next]}`;
@@ -333,9 +334,26 @@ async function pollPallet() {
 let palletDrawnMode = '';        // echarts 已绘制骨架标记：'' | '3d' | 'top'
 let palletViewMode = 'iso';      // 面板④视图：'iso'(等距自绘,默认·零依赖) | '3d'(bar3D) | 'top'(俯视)
 let palletIsoCanvas = null;      // 等距模式的自绘画布（纯 canvas 2D，任何环境必然可渲染）
-let lastPalletDrawAt = 0;        // 上次 bar3D 绘制墙钟时刻（节流用）
+let palletDomKind = '';          // DOM 载体现状：'' | 'iso' | 'echarts'（幂等切换的依据）
+let pallet3DSig = '';            // 真3D 当前已渲染内容的签名（内容变化才 merge）
+let palletSavedCam = null;       // 真3D 交互后的相机参数（alpha/beta/distance），更新时回填防视角重置
+let lastPallet3DAt = 0;          // 上次真3D merge 的墙钟时刻（软渲染节流用）
 
-function pallet3DBaseOption() {
+/* 相机捕获：从 echarts 实例读回交互后的 viewControl（alpha/beta/distance），
+   供真3D 重建时回填——否则每次 setOption 都会把视角打回默认值 */
+function palletCaptureCam() {
+  try {
+    const vc = charts.pallet.getOption().grid3D[0].viewControl;
+    if (vc && typeof vc.alpha === 'number') {
+      palletSavedCam = { alpha: vc.alpha, beta: vc.beta,
+                         distance: vc.distance,
+                         center: Array.isArray(vc.center) ? vc.center.slice()
+                                                          : [0, 0, 0] };
+    }
+  } catch (e) { /* 实例未就绪等场景：保留上一次的相机参数 */ }
+}
+
+function pallet3DBaseOption(cam) {
   const axLabel = { textStyle: { color: '#7fa3bf', fontSize: 11 } };
   return {
     tooltip: {
@@ -354,14 +372,16 @@ function pallet3DBaseOption() {
     yAxis3D: { type: 'category', name: '行', data: ['0', '1', '2', '3'],
                axisLabel: axLabel },
     zAxis3D: { name: '高度(mm)', min: 0, max: 800, axisLabel: axLabel },
-    grid3D: {
+    grid3D: Object.assign({
       boxWidth: 60, boxDepth: 80, boxHeight: 80,
       light: { main: { intensity: 1.1 }, ambient: { intensity: .35 } },
-      viewControl: { distance: 260, alpha: 28, beta: 40 },
-    },
+    }, cam ? { viewControl: Object.assign({ distance: 260, alpha: 28, beta: 40 },
+                                           cam) }
+           : { viewControl: { distance: 260, alpha: 28, beta: 40 } }),
     series: [{
       type: 'bar3D', data: [],
-      itemStyle: { opacity: .95 }, shading: 'color',
+      // 不用半透明：透明混合会放大相邻柱共面接缝的闪烁（穿模观感来源之一）
+      itemStyle: { opacity: 1 }, shading: 'color',
     }],
   };
 }
@@ -475,10 +495,23 @@ function drawPalletIsoCanvas(grid) {
   }
 }
 
-/* 视图模式切换：确保 DOM 载体（自绘画布 vs echarts 实例）与目标模式匹配 */
+/* 视图模式切换（幂等修复版）：只有 iso↔echarts 真正换族时才动 DOM/重置骨架。
+   修复记录：原实现每次轮询都无条件走 ensure/leave，而 leave 会把 palletDrawnMode
+   清空——导致真3D 每秒都被判"骨架需重设"而 clear+全量重建，软渲染 GL 直接冻结在坏帧。 */
 function setPalletDomMode(mode) {
-  if (mode === 'iso') ensurePalletIsoCanvas();
+  const want = (mode === 'iso') ? 'iso' : 'echarts';
+  if (palletDomKind === want) {
+    // 同族内：仅补挂可能缺失的实例引用，绝不动骨架/画布
+    if (want === 'echarts' && !charts.pallet && window.echarts) {
+      const host = $('chartPallet');
+      charts.pallet = echarts.getInstanceByDom(host) || echarts.init(host);
+      palletDrawnMode = '';
+    }
+    return;
+  }
+  if (want === 'iso') ensurePalletIsoCanvas();
   else leavePalletIsoCanvas();
+  palletDomKind = want;
 }
 
 function drawPalletFromCache() {
@@ -501,20 +534,28 @@ function drawPalletFromCache() {
   // 先确保 DOM/实例与目标模式匹配（echarts 未就绪时保持空实例，不抛错）
   setPalletDomMode(palletViewMode);
   if (!charts.pallet) return;                    // echarts 尚未加载：键不落账，下轮重试
-  if (palletViewMode === '3d') {
-    const nowMs = Date.now();
-    if (nowMs - lastPalletDrawAt < 1200) return; // bar3D 更新节流
-    lastPalletDrawAt = nowMs;
-  }
   lastBoxesKey = key;
 
   if (palletViewMode === '3d') {
+    /* 真3D 实时生长（设计变更：应用户要求恢复逐箱可见）：
+       DOM 切换已幂等化，此处只剩纯 series 数据 merge——不再有 clear 全量重建，
+       软渲染竞态的源头已移除；配合相机回填与 700ms 节流保证视角稳定、刷新平滑。
+       换垛清零瞬间由上层 grid 回退到 last_completed 显示成品，不闪空白。 */
+    const nowMs = Date.now();
+    if (nowMs - lastPallet3DAt < 700) return;    // 节流：键未落账，下轮重试
+    lastPallet3DAt = nowMs;
+    const sig = 'G:' + grid.length + '@' + cachedPallet.current_pallet_id;
+    if (sig === pallet3DSig) return;             // 内容未变化
+    pallet3DSig = sig;
+    palletCaptureCam();                          // 记下用户当前视角
+
     if (palletDrawnMode !== '3d') {
       charts.pallet.clear();
-      charts.pallet.setOption(pallet3DBaseOption());
+      charts.pallet.setOption(pallet3DBaseOption(palletSavedCam));
       palletDrawnMode = '3d';
     }
     charts.pallet.setOption({
+      grid3D: { viewControl: Object.assign({}, palletSavedCam || {}) },
       series: [{
         // 分类轴取值：[列x, 行y, 柱高=(z+1)*180mm]；悬浮提示经 dataIndex 回查毫米坐标
         data: grid.map(b => ({
@@ -522,7 +563,7 @@ function drawPalletFromCache() {
           itemStyle: { color: PALLET_LAYER_COLORS[b.z % 4] },
         })),
       }],
-    });                                          // 只 merge 数据：不清屏、不动视角
+    });                                          // 相机参数随更新一并回填
   } else {                                       // 'top' 俯视散点
     if (palletDrawnMode !== 'top') {
       charts.pallet.clear();
