@@ -346,18 +346,21 @@ function pallet3DBaseOption() {
                    <br>物理(${b.px_mm},${b.py_mm},${b.pz_mm})mm` : '';
       },
     },
-    xAxis3D: { name: 'X(mm)', min: -400, max: 400, axisLabel: axLabel },
-    yAxis3D: { name: 'Y(mm)', min: -550, max: 550, axisLabel: axLabel },
-    zAxis3D: { name: 'Z(mm)', min: 0, max: 800, axisLabel: axLabel },
+    // 修复记录：连续毫米轴 + barSize 数组在部分软渲染环境下不生效
+    // （实测柱体仅约40mm宽、呈细针/金字塔状）。改用 bar3D 标准的分类轴用法：
+    // 列(3)×行(4) 离散格位，柱体自动满格成规则立方块，形状由坐标系保证。
+    xAxis3D: { type: 'category', name: '列', data: ['0', '1', '2'],
+               axisLabel: axLabel },
+    yAxis3D: { type: 'category', name: '行', data: ['0', '1', '2', '3'],
+               axisLabel: axLabel },
+    zAxis3D: { name: '高度(mm)', min: 0, max: 800, axisLabel: axLabel },
     grid3D: {
-      boxWidth: 90, boxDepth: 120, boxHeight: 90,
+      boxWidth: 60, boxDepth: 80, boxHeight: 80,
       light: { main: { intensity: 1.1 }, ambient: { intensity: .35 } },
-      viewControl: { distance: 420, alpha: 28, beta: 40 },
+      viewControl: { distance: 260, alpha: 28, beta: 40 },
     },
     series: [{
-      type: 'bar3D', data: [], barSize: [230, 230],
-      // 修复记录：shading 用 'color'（纯色、零光照依赖）——lambert 依赖光照法线计算，
-      // 在软渲染/版本边缘组合下可能整面发黑或不可见；'color' 保证柱面必然上色。
+      type: 'bar3D', data: [],
       itemStyle: { opacity: .95 }, shading: 'color',
     }],
   };
@@ -513,8 +516,9 @@ function drawPalletFromCache() {
     }
     charts.pallet.setOption({
       series: [{
+        // 分类轴取值：[列x, 行y, 柱高=(z+1)*180mm]；悬浮提示经 dataIndex 回查毫米坐标
         data: grid.map(b => ({
-          value: [b.px_mm, b.py_mm, b.pz_mm, (b.z + 1) * 180],
+          value: [String(b.x), String(b.y), (b.z + 1) * 180],
           itemStyle: { color: PALLET_LAYER_COLORS[b.z % 4] },
         })),
       }],
