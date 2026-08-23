@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 运行期生成目录（main/selftest 会自动创建）
+logs/
+reports/
+
+# 虚拟环境 / IDE
+.venv/
+.idea/
+.vscode/

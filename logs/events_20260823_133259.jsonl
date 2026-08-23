@@ -1,8 +1,0 @@
-{"seq": 1, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.818", "source": "MES-ENGINE", "type": "mes.order_created", "severity": "INFO", "data": {"wo_id": "WO-0001", "model": "虚拟组件A", "target_qty": 240, "ok": 0, "ng": 0, "total": 0, "progress_pct": 0.0, "status": "执行中", "created_at": 0.0, "closed_at": null, "batch_ids": [], "yield_pct": 0.0}}
-{"seq": 2, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.820", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 3, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.820", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 4, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.884", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 5, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.884", "source": "WH-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 6, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.884", "source": "AGV-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 7, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.884", "source": "AGV-02", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
-{"seq": 8, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:59.885", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "自动循环开始"}}

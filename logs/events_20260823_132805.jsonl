@@ -1,2 +1,0 @@
-{"seq": 1, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:28:05.136", "source": "MES-ENGINE", "type": "mes.order_created", "severity": "INFO", "data": {"wo_id": "WO-0001", "model": "虚拟组件A", "target_qty": 240, "ok": 0, "ng": 0, "total": 0, "progress_pct": 0.0, "status": "执行中", "created_at": 0.0, "closed_at": null, "batch_ids": [], "yield_pct": 0.0}}
-{"seq": 2, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:28:05.571", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "ems_maintain", "params": {"dev_id": "ASM-01"}, "ok": false}}
