@@ -1,7 +1,7 @@
 # Virtual-Smart-Factory 虚拟智能工厂一体化仿真平台
 
 > 旗舰作品集项目 · 全软件仿真、零硬件依赖 · 所有运行指标均为 **仿真验证值**
-> 分三个班次开发：**班次1 仿真内核与产线层（已完成）** → **班次2 SCADA监控层+AGV物流+Web可视化（当前已完成）** → 班次3 视觉算法/MES/EMS
+> 分三个班次开发：**班次1 仿真内核与产线层（已完成）** → **班次2 SCADA监控层+AGV物流+Web可视化（已完成）** → **班次3 视觉算法/MES/EMS（已完成）**
 
 ## 一、班次1 已实现能力
 
@@ -26,14 +26,32 @@
 | AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系 |
 | 监控大屏 | `web/static/*` | ECharts(CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型3D(bar3D 毫米坐标)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
 
-## 三、安装与启动
+## 三、班次3 新增能力（视觉算法 + MES 制造执行 + EMS 能源/健康管理）
+
+| 子系统 | 文件 | 能力 |
+|---|---|---|
+| 多特征测量模型 | `vision/measure_model.py` | 单尺寸高斯抽样升级为 4 维观测向量（尺寸偏差/圆度/表面得分/边缘锐度，含测量噪声）；真值口径 NG = 尺寸超差(≈4.6%) ∪ 公差带内隐性缺陷(≈2.5%) ≈ **7%**，隐性缺陷（表面划痕/边缘崩缺/装配错位）只有多特征算法能识别 |
+| 轻量分类器 | `vision/classifiers.py` | 全部 numpy 手写：健康基线异常得分变换器（SPC 控制限思想）/ 逻辑回归（批量GD+L2，在线主模型）/ 单类马氏距离（Hotelling T² 思想，A/B 对照第二算法）；参数支持导出回载 |
+| 样本与评估 | `vision/defect_generator.py` | 受控随机生成带真值缺陷样本集（种子固定可复现）；混淆矩阵/准确率/查准/查全/F1 计算；规则法 vs 逻辑回归 vs 马氏三方 A/B 对照流水线（独立测试集口径） |
+| 判定算法注入 | `vision/vision_upgrade.py` | 实例级覆写 `UnitVision.judge()`（原类零改动，班次1/2 回归路径保留）；判定明细（P(NG)/特征向量/与规则法对照结论）随质检记录落盘；在线混淆矩阵滚动累计；`--rule-vision` 一键退回规则法对照 |
+| MES 引擎 | `mes/mes_engine.py` | 订阅总线通配符 "*" 自动报工；OEE ≈ 可用率×性能率×良品率（装配单元近似口径）；工单满单自动关单翻单；产品↔托盘↔批次↔工单四级追溯反查；Web 命令手动开单 |
+| 订单/追溯模型 | `mes/order_model.py` | WorkOrder/Batch 数据模型 + TraceabilityIndex 追溯索引（正查/反查、托盘库位流转历史、QC 档案、容量上限防长跑爆内存） |
+| JSONL 回放 | `mes/jsonl_replay.py` | 离线回放 `logs/events_*.jsonl` 重建完整 MES 台账（与在线台账一致性已入自检 C2）；CLI 直接输出报工报表 |
+| 能耗模型 | `ems/energy_model.py` | 订阅 device.state 按【状态→功率kW】曲线分段积分 kWh（未闭合段快照时虚拟结算），折算电费与 CO₂，全部为仿真验证值 |
+| 健康监视 | `ems/health_monitor.py` | 滚动窗口提取 故障次数/停机占比/平均恢复时长/启停切换 → 扣分制 0~100 健康分 + 四级维护建议；跌破阈值发 `ems.health_alert`（滞回防抖）；`ems_maintain / ems_maintain_done` 维护命令闭环（触发 `DeviceBase.enter_maintenance()` 预留接口） |
+| 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/ems/energy /api/ems/health`；面板⑨ MES 工单与追溯（支持产品号/托盘号查询）、面板⑩ 能耗·设备健康度 |
+
+## 四、安装与启动
 
 ```bash
 # 环境：Windows 10 + Python 3.12
 pip install -r requirements.txt      # numpy/flask/pymodbus
 
-# 全厂自检（逐模块 + Web API 冒烟 + AGV 闭环 + 600s 加速冒烟，报告到 reports/）
+# 全厂自检（A模块级 + B Web/AGV冒烟 + C 算法/MES/EMS 共14用例 + 600s 加速联跑，报告到 reports/）
 python selftest.py
+
+# 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
+python mes/jsonl_replay.py
 
 # ★ 班次2 一键演示：实时模式 + 监控大屏(http://127.0.0.1:5080)
 #   + WebSocket(5081) + Modbus TCP 从站(1502)，Ctrl+C 优雅停机
@@ -54,14 +72,15 @@ python main.py --speed 60 --duration 900
 ```
 
 每个模块均可独立运行内置自检：`python core/sim_clock.py`、`python agv/agv_fleet.py`、
-`python scada/ws_hub.py`、`python scada/web_server.py`、`python scada/modbus_server.py` 等。
+`python scada/ws_hub.py`、`python scada/web_server.py`、`python scada/modbus_server.py`、
+`python vision/vision_upgrade.py`、`python mes/mes_engine.py`、`python ems/health_monitor.py` 等。
 
-## 四、文件树
+## 五、文件树
 
 ```
 Virtual-Smart-Factory/
 ├─ main.py                    编排入口（Plant 编排器 + AGV接入 + execute_command + --web）
-├─ selftest.py                全厂自检（A1~A8 + B2 Web冒烟 + B3 AGV闭环 + B1 600s联跑 = 11 用例）
+├─ selftest.py                全厂自检（A1~A8 + B2 Web冒烟 + B3 AGV闭环 + C1~C3 + B1 600s联跑 = 14 用例）
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/
@@ -79,35 +98,53 @@ Virtual-Smart-Factory/
 │  └─ agv_fleet.py            AGV 车队（六阶段任务状态机 + 调度器 + 平面位置模型）
 ├─ scada/                     【班次2新增】
 │  ├─ ws_hub.py               标准库 RFC6455 WebSocket 推送网关
-│  ├─ web_server.py           Flask REST + WS 订阅推送 + KPI 趋势聚合
+│  ├─ web_server.py           Flask REST + WS 订阅推送 + KPI 趋势聚合（班次3追加 /api/mes/* /api/ems/*）
 │  └─ modbus_server.py        pymodbus TCP 从站（io_table→保持寄存器映射）
-├─ web/static/                【班次2新增】监控大屏（index.html + app.js + style.css，ECharts CDN）
+├─ vision/                    【班次3新增】视觉算法升级包
+│  ├─ measure_model.py        多特征测量仿真模型（4维观测+测量噪声+隐性缺陷真值口径）
+│  ├─ classifiers.py          numpy 手写轻量分类器（异常变换器/逻辑回归/单类马氏）
+│  ├─ defect_generator.py     缺陷样本生成器 + 混淆矩阵指标计算 + 三方A/B评估
+│  └─ vision_upgrade.py       UnitVision.judge() 实例级注入入口（保留规则法A/B对照）
+├─ mes/                       【班次3新增】制造执行系统
+│  ├─ order_model.py          工单/批次数据模型 + 产品→托盘→批次→工单追溯索引
+│  ├─ mes_engine.py           MES 引擎（事件驱动自动报工/OEE近似/四级追溯反查）
+│  └─ jsonl_replay.py         JSONL 回放器（离线重建 MES 台账 + CLI 报告）
+├─ ems/                       【班次3新增】能源与健康管理
+│  ├─ energy_model.py         设备能耗模型（状态功率曲线分段积分 → kWh/电费/CO₂）
+│  └─ health_monitor.py       设备健康评分（滚动窗口特征 → 0~100分 + 维护建议 + 告警）
+├─ web/static/                【班次2新增·班次3扩展】监控大屏（index.html + app.js + style.css，
+│                             ECharts CDN；班次3追加面板⑨ MES工单追溯、面板⑩ 能耗·健康度）
 ├─ docs/
 │  ├─ HANDOVER_SHIFT2.md      班次2交接Prompt模板（存档）
-│  ├─ HANDOVER_SHIFT3.md      班次3交接Prompt模板【班次2产出】
+│  ├─ HANDOVER_SHIFT3.md      班次3交接Prompt模板（存档）
 │  ├─ CHECKLIST_SHIFT1.md     班次1自检清单
-│  └─ CHECKLIST_SHIFT2.md     班次2自检清单【班次2产出】
+│  ├─ CHECKLIST_SHIFT2.md     班次2自检清单【班次2产出】
+│  └─ CHECKLIST_SHIFT3.md     班次3自检清单【班次3产出】
 ├─ logs/                      运行期生成：events_*.jsonl 事件流
 └─ reports/                   运行期生成：selftest_report_*.txt 自检报告
 ```
 
-## 五、关键指标（仿真验证值）
+## 六、关键指标（仿真验证值）
 
 - 装配节拍 **32.0 s/件**（8 步顺控之和，可在 settings 改配）
-- 视觉检测节拍 **2.5 s/件**，理论 NG 率 **≈4.6%**（σ=0.04mm，公差 ±0.08mm）
+- 视觉检测节拍 **2.5 s/件**；真值 NG 率 **≈7%**（尺寸超差 ≈4.6%，σ=0.04mm 公差 ±0.08mm ∪ 公差带内隐性缺陷 ≈2.5%）
 - 码垛能力 **48 箱/托**（3×4×4），单箱码放 1.2s
 - 立体库容量 **200 托**（4×10×5），堆垛机单任务 25s
 - AGV 车速 **1.5 m/s**，装/卸各 4s，2 台车；满托端到端入库（码垛出口→上架）约 **65s**
-- 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次2 因并入 AGV 随机故障，随机流与班次1略有差异）
-- 自检 **11/11 通过**（A1~A8 模块级 + B2 Web 冒烟 + B3 AGV 闭环 + B1 联跑）
+- 视觉算法 A/B 对照（训练1500件/独立测试2000件）：逻辑回归 **准确率98.95% / 查全84.8% / F1 90.99%**，对比班次1规则法 97.45%/64.0%/75.83%（查全率 64%→84.8% 来自"健康基线异常特征"工程）；600s 联跑在线混淆矩阵账目自洽
+- MES：工单→批次→托盘→产品 四级追溯全链路闭环（可反查库位与流转历史）；48件直灌+装配并行产出用例报工 OK54/NG2，良率 **96.4%**，OEE≈**90.0%**（A×P×Q 近似口径）；JSONL 回放重建台账与在线完全一致
+- EMS 能耗：功率曲线分段积分精确（60s×12kW=0.200kWh，误差<0.01）；电费按 0.65 元/kWh、CO₂ 按 0.5568 kg/kWh 折算
+- EMS 健康：无故障期评分 ≥98 → 全线急停40s 后 89.5 → 连续故障 46.5（跌破告警线60自动发 `ems.health_alert` 并给出维护建议）；`ems_maintain` 维护命令进出闭环
+- 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径）
+- 自检 **14/14 通过**（A1~A8 模块级 + B2 Web 冒烟 + B3 AGV 闭环 + C1~C3 算法/MES/EMS + B1 联跑）
 
-## 六、后续班次挂接点速查
+## 七、后续班次挂接点速查
 
 | 班次 | 挂接点 | 位置 |
 |---|---|---|
 | 2✔ | SCADA Web 服务（REST/WebSocket） | `scada/web_server.py`，端口 `settings.SCADA_HTTP_PORT/SCADA_WS_PORT` |
 | 2✔ | Modbus TCP 从站 | `scada/modbus_server.py`，端口 `MODBUS_TCP_PORT`，映射表 `/api/modbus/map` |
 | 2✔ | 真实 AGV 调度 | `agv/agv_fleet.py`（已替换占位搬运；多车调度扩展点在 `AGVFleet.update()` 派单段） |
-| 3 | 真实视觉算法 | 覆写 `UnitVision.judge()`（qc_records 已含原始测量字段） |
-| 3 | MES 报工 | 直接消费 JSONL 事件流或订阅 `flow.product_out / vision.* / pallet.full / wh.*` |
-| 3 | EMS/健康模块 | 订阅 `fault.raised / device.state` 事件做特征提取；`DeviceBase.enter_maintenance()` 已预留 |
+| 3✔ | 真实视觉算法 | `vision/vision_upgrade.py`（实例级注入覆写 `judge()`；`--rule-vision` 退回规则法对照） |
+| 3✔ | MES 报工 | `mes/mes_engine.py`（订阅 "*" 自动报工/追溯）；离线分析 `python mes/jsonl_replay.py` |
+| 3✔ | EMS/健康模块 | `ems/energy_model.py`（能耗积分）+ `ems/health_monitor.py`（健康评分/告警/维护接口已启用） |
