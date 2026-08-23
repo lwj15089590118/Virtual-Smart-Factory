@@ -52,6 +52,10 @@ class UnitVision(DeviceBase):
         # ---- 检测站内部状态 ----
         self._current: Optional[Product] = None      # 正在检测的产品
         self._timer = 0.0                            # 已检测耗时
+        # 班次3修改后修复：NG 剔除挡板脉冲保持截止时刻（None=挡板已复位）。
+        # 修复记录：原实现同一 tick 内置 1 又清 0，脉宽为 0，
+        # Modbus(0.5s 刷新)/大屏永远采样不到该信号——现按 VISION_REJECT_PULSE_S 保持。
+        self._reject_until: Optional[float] = None
         # ---- 统计 ----
         self.ok_total = 0
         self.ng_total = 0
@@ -82,6 +86,12 @@ class UnitVision(DeviceBase):
     # ------------------------------------------------------------------
     def update(self, dt: float) -> None:
         super().update(dt)
+
+        # NG 剔除挡板脉冲到期复位（放在冻结态判断之前：
+        # 即使检测中发生故障，挡板也会在脉宽到期后落回安全位）
+        if self._reject_until is not None and self.clock.now() >= self._reject_until:
+            self.set_io("do_reject_gate", 0)
+            self._reject_until = None
 
         if self.state in (DeviceState.STOPPED, DeviceState.FAULT,
                           DeviceState.MAINTENANCE):
@@ -139,13 +149,15 @@ class UnitVision(DeviceBase):
             self.ng_total += 1
             product.rework = True
             self.rework_lane.append(product)
-            self.set_io("do_reject_gate", 1)    # 剔除挡板动作（下一拍复位）
+            # 剔除挡板动作：置位并保持 VISION_REJECT_PULSE_S 脉宽（到期由 update 复位），
+            # 保证低速/高速运行下该 DO 信号均可被 Modbus/UI 观测到
+            self.set_io("do_reject_gate", 1)
+            self._reject_until = round(self.clock.now() + S.VISION_REJECT_PULSE_S, 3)
             self.bus.publish(self.device_id, EventTypes.VISION_NG,
                               dict(record, lane="返修道"))
 
         self._current = None
         self.set_io("di_part_in_place", 0)
-        self.set_io("do_reject_gate", 0)
 
     # ------------------------------------------------------------------
     # 查询接口
@@ -180,9 +192,11 @@ if __name__ == "__main__":
     vis = UnitVision(clock, bus, unit_id="VIS-T1",
                      rng=np.random.default_rng(42))
     vis.start_up()
-    ok_events, ng_events = [], []
+    ok_events, ng_events, gate_at_ng = [], [], []
     bus.subscribe(EventTypes.VISION_OK, lambda e: ok_events.append(e))
-    bus.subscribe(EventTypes.VISION_NG, lambda e: ng_events.append(e))
+    bus.subscribe(EventTypes.VISION_NG,
+                  lambda e: gate_at_ng.append(vis.get_io("do_reject_gate"))
+                  or ng_events.append(e))
 
     # 灌入 200 件待检品（直接构造产品对象，模拟装配流出）
     from lines.product import Product
@@ -200,6 +214,15 @@ if __name__ == "__main__":
     assert all(p.rework for p in vis.rework_lane)
     assert 0.01 <= vis.ng_rate() <= 0.12, f"NG 率异常偏离理论值: {vis.ng_rate()}"
     assert len(vis.qc_records) == 200
+    # 剔除挡板脉宽验证（修复回归点）：NG 判定时刻挡板应为 1，
+    # 且脉宽(1s)过后自动复位为 0——不再出现"同拍置位又清零采不到"的问题
+    assert ng_events, "种子42下200件应产生 NG 样本"
+    assert all(g == 1 for g in gate_at_ng), \
+        f"NG 事件时刻剔除挡板未保持: {gate_at_ng}"
+    clock.advance_ticks(int((S.VISION_REJECT_PULSE_S + 0.5) / clock.dt),
+                        step_fn=vis.update)
+    assert vis.get_io("do_reject_gate") == 0 and vis._reject_until is None, \
+        "脉宽到期后剔除挡板应自动复位"
     # 相同种子复现性验证（作品集可复现性）
     vis2 = UnitVision(clock, bus, unit_id="VIS-T2", rng=np.random.default_rng(42))
     vis2.start_up()                                   # 复现性对照机也需上电

@@ -21,7 +21,10 @@ scada/modbus_server.py —— Modbus TCP 从站（pymodbus，班次2 交付项2�
 线程模型假设（一行记录）：
     - StartTcpServer 阻塞运行在 daemon 线程；IO 镜像线程每 MODBUS_REFRESH_S
       墙钟秒把 io_table 快照刷进寄存器（仅读侧镜像，不参与任何仿真计时，
-      时间纪律不受影响）；DO 写回经 devices 字典原子替换单值，竞态无害。
+      时间纪律不受影响）；DO/AO 写回经 devices 字典原子替换单值，竞态无害。
+修复记录：外部写入现由 CallbackDataBlock 拦截并回调 handle_write——
+    DO/AO 可写区写回设备真实生效；只读区误写被忽略并在下一刷新周期纠偏
+    （此前 handle_write 未挂接数据块，可写区写不进设备、语义自洽但不完整）。
 """
 
 import threading
@@ -88,16 +91,48 @@ def build_register_map(devices: Dict[str, object]) -> List[dict]:
     return blocks
 
 
+class CallbackDataBlock(ModbusSequentialDataBlock):
+    """
+    写入拦截数据块（修复记录：原版 handle_write 只是"待接入"的空挂点，
+    pymodbus 默认数据块允许任意写但不通知业务层——外部写 DO/AO 实际到不了设备）。
+    现在外部写寄存器（FC6/FC16）时逐地址回调 ModbusServer.handle_write：
+        - 命中 DO/AO 可写区 → 真实写回设备 set_io（远程控制生效）；
+        - 只读区（状态/故障/DI/AI）→ handle_write 忽略，寄存器由 sync_once 纠偏；
+    镜像线程自身的全量刷新（sync_once）经 _mirroring 标志旁路回调，防止写回环。
+    寻址口径（pymodbus 3.6 实测）：zero_mode=True 时 slave 直通地址，
+    数据块收到的 address 与 build_register_map 的 reg 字段同一坐标系（块基址 0）。
+    """
+
+    def __init__(self, address: int, values: list, server: "ModbusServer"):
+        super().__init__(address, values)
+        self._server = server
+
+    def setValues(self, address, values):
+        if not self._server._mirroring:
+            if not isinstance(values, (list, tuple)):      # FC6 单寄存器写为标量
+                values = [values]
+            base = int(address)
+            for i, v in enumerate(values):
+                try:
+                    self._server.handle_write(base + i, int(v))
+                except Exception as exc:   # 回调异常不允许打断 pymodbus 请求线程
+                    print(f"[Modbus] 写回调异常 @ reg {base + i}: {exc}")
+        super().setValues(address, values)
+
+
 class ModbusServer:
     """把 Plant 设备点表暴露为 Modbus TCP 保持寄存器。"""
 
     def __init__(self, plant):
         self.plant = plant
         self.map = build_register_map(plant.devices)
+        # 镜像标志：sync_once 全量刷写时置 True，旁路 CallbackDataBlock 的写回调
+        self._mirroring = False
         # ---- 数据存储：单从站模式 + zero_mode（客户端地址即块内偏移，最直观）----
+        # 修复记录：hr 块换为写入拦截版 CallbackDataBlock，外部写 DO/AO 真正写回设备
         self.store = ModbusSlaveContext(
             zero_mode=True,
-            hr=ModbusSequentialDataBlock(0, [0] * S.MODBUS_REG_COUNT))
+            hr=CallbackDataBlock(0, [0] * S.MODBUS_REG_COUNT, self))
         self.context = ModbusServerContext(slaves=self.store, single=True)
         self.identity = ModbusDeviceIdentification(info_name={
             "VendorName": "Virtual-Smart-Factory",
@@ -146,19 +181,23 @@ class ModbusServer:
     def sync_once(self) -> None:
         """把全部设备的当前值刷进保持寄存器（每次全量覆盖，幂等）。"""
         store = self.store
-        for block in self.map:
-            dev = self.plant.devices.get(block["device"])
-            if dev is None:
-                continue
-            values = [_STATE_CODE.get(dev.state, 0),
-                      1 if dev.current_fault else 0]
-            values += [int(bool(dev.get_io(p["name"]))) for p in block["di"]]
-            values += [int(bool(dev.get_io(p["name"]))) for p in block["do"]]
-            values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
-                       for p in block["ai"]]
-            values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
-                       for p in block["ao"]]
-            store.setValues(3, block["base"], values)   # fc=3 保持寄存器
+        self._mirroring = True            # 镜像刷写旁路写回调（防止镜像→回调→写设备回环）
+        try:
+            for block in self.map:
+                dev = self.plant.devices.get(block["device"])
+                if dev is None:
+                    continue
+                values = [_STATE_CODE.get(dev.state, 0),
+                          1 if dev.current_fault else 0]
+                values += [int(bool(dev.get_io(p["name"]))) for p in block["di"]]
+                values += [int(bool(dev.get_io(p["name"]))) for p in block["do"]]
+                values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
+                           for p in block["ai"]]
+                values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
+                           for p in block["ao"]]
+                store.setValues(3, block["base"], values)   # fc=3 保持寄存器
+        finally:
+            self._mirroring = False
 
     def _sync_loop(self) -> None:
         import time as wt
@@ -174,12 +213,10 @@ class ModbusServer:
     # ------------------------------------------------------------------
     def handle_write(self, address: int, value: int) -> str:
         """
-        外部对单个保持寄存器的写意图处理：
-        - 命中某设备 DO/AO 点 → 真实写回 set_io（远程控制演示）；
-        - 其余（状态/故障/DI/AI 只读区）→ 忽略并返回说明。
-        注：本方法供扩展接入自定义 DataBlock；默认数据块允许任意写，
-        因此从站同时以 sync_once 全量纠偏（下一刷新周期即恢复真值），
-        可写区的写入会存活、只读区的误写会被纠正——语义自洽。
+        外部对单个保持寄存器的写意图处理（由 CallbackDataBlock 在请求线程回调）：
+        - 命中某设备 DO/AO 点 → 真实写回 set_io（远程控制生效）；
+        - 其余（状态/故障/DI/AI 只读区）→ 忽略并返回说明，
+          寄存器旧值由 sync_once 在下一刷新周期纠偏回真值。
         """
         for block in self.map:
             rel = address - block["base"]
@@ -236,15 +273,27 @@ if __name__ == "__main__":
     press_entry = next(p for p in asm_block["ai"] if p["name"] == "ai_press_force")
     rr = cli.read_holding_registers(press_entry["reg"], count=1, slave=S.MODBUS_UNIT_ID)
     print(f"[读取] ai_press_force 寄存器={rr.registers[0]} (工程值÷100 kN)")
-    # --- 写 DO 演示：置位 do_stack_g 三色灯绿 ---
+    # --- 写 DO 演示：置位 do_stack_g 三色灯绿（纯 TCP 写，经 CallbackDataBlock 回调写回设备）---
     stack_entry = next(p for p in asm_block["do"] if p["name"] == "do_stack_g")
     wr = cli.write_register(stack_entry["reg"], 1, slave=S.MODBUS_UNIT_ID)
     assert not wr.isError(), "写 DO 失败"
+    wt.sleep(0.3)                          # 等请求线程完成回调（墙钟，仅测试等待）
+    assert plant.assembly.get_io("do_stack_g") == 1, \
+        "外部写 DO 未写回设备（CallbackDataBlock 回调链路断）"
     ret = mb.handle_write(stack_entry["reg"], 1)
     assert "do_stack_g=1" in ret, f"写回处理异常: {ret}"
-    assert plant.assembly.get_io("do_stack_g") in (0, 1)
+
+    # --- 只读区纠偏演示：向立体库状态寄存器伪造"故障码3"，下一刷新周期应被真值覆盖 ---
+    wh_block = next(b for b in mb.map if b["device"] == S.WAREHOUSE_ID)
+    wr = cli.write_register(wh_block["state_reg"], 3, slave=S.MODBUS_UNIT_ID)
+    assert not wr.isError(), "只读区写入请求失败"
+    wt.sleep(S.MODBUS_REFRESH_S * 2 + 0.5)         # 等至少两个镜像周期（墙钟，仅测试等待）
+    rr = cli.read_holding_registers(wh_block["state_reg"], count=1, slave=S.MODBUS_UNIT_ID)
+    expect_code = _STATE_CODE.get(plant.warehouse.state, 0)
+    assert not rr.isError() and rr.registers[0] == expect_code, \
+        f"只读区误写未被纠偏: {rr.registers[0]} vs 真值{expect_code}"
     cli.close()
 
     print(f"[modbus_server 自检通过] 映射{len(mb.map)}块, "
-          f"读状态={state_code}, DO写回链路OK (仿真验证值)")
+          f"读状态={state_code}, DO写回链路OK, 只读区纠偏OK (仿真验证值)")
     mb.stop()

@@ -58,7 +58,9 @@ class Plant:
                  mode: str = "fast",
                  seed: int = S.DEFAULT_SEED,
                  enable_random_faults: bool = True,
-                 enable_agv: bool = True):          # 班次2修改：允许关闭车队做回归对照
+                 enable_agv: bool = True,                # 班次2修改：允许关闭车队做回归对照
+                 enable_vision_algo: Optional[bool] = None,  # 修复：None=跟随 S.VISION_ALGO_ENABLE；
+                 enable_ems: bool = True):               # 修复：EMS 装配开关（对齐 VISION/MES 风格）
         # ---- 内核 ----
         self.clock = SimClock(dt=S.SIM_DT, speed=speed)
         self.bus = EventBus(self.clock, log_dir=S.LOG_DIR)
@@ -108,6 +110,11 @@ class Plant:
         self.mes = None              # MES 引擎（工单/追溯/报工）
         self.ems_energy = None       # EMS 能耗模型
         self.ems_health = None       # EMS 健康监视器
+        # 修复记录：装配开关收敛为实例参数，CLI 只传参、不再改写 config 全局量
+        self.enable_vision_algo = (S.VISION_ALGO_ENABLE
+                                   if enable_vision_algo is None
+                                   else bool(enable_vision_algo))
+        self.enable_ems = bool(enable_ems) and S.EMS_ENABLE
 
     @property
     def _agv_transit(self) -> List[str]:
@@ -160,7 +167,9 @@ class Plant:
                  均只订阅 EventTypes 事件，不侵入仿真内核。
         """
         # ---- 班次3修改：视觉算法升级包注入（实例级覆写 judge，原类零改动）----
-        if S.VISION_ALGO_ENABLE:
+        # 修复记录：改用实例开关 enable_vision_algo 判断（CLI --rule-vision 走传参），
+        # 配置中心 S.VISION_ALGO_ENABLE 仍作为默认值保留，运行期不再被外部改写
+        if self.enable_vision_algo and S.VISION_ALGO_ENABLE:
             from vision.vision_upgrade import install_vision_upgrade
             self.vision_algo = install_vision_upgrade(self.vision, seed=self.seed)
             print(f"[班次3 视觉] 判定算法已注入: {self.vision_algo.ALGO_ID} "
@@ -173,11 +182,14 @@ class Plant:
             print(f"[班次3 MES] 引擎已挂接，首张工单 {self.mes.orders[0].wo_id}"
                   f"(计划{self.mes.orders[0].target_qty}件)")
         # ---- 班次3修改：EMS 能耗模型 + 健康监视器（纯事件驱动，零内核侵入）----
-        from ems.energy_model import EnergyModel
-        from ems.health_monitor import HealthMonitor
-        self.ems_energy = EnergyModel(self)
-        self.ems_health = HealthMonitor(self)
-        print("[班次3 EMS] 能耗模型与健康监视器已订阅事件总线")
+        # 修复记录：受 EMS_ENABLE / enable_ems 双重开关控制（此前无条件装配，
+        # 与 VISION/MES 的开关风格不一致）；关闭时 Web /api/ems/* 自动降级 enabled=False
+        if self.enable_ems:
+            from ems.energy_model import EnergyModel
+            from ems.health_monitor import HealthMonitor
+            self.ems_energy = EnergyModel(self)
+            self.ems_health = HealthMonitor(self)
+            print("[班次3 EMS] 能耗模型与健康监视器已订阅事件总线")
 
     # ==================================================================
     # 每 tick 全厂步进（顺序即物料流向，先注入故障再让设备响应）
@@ -497,12 +509,12 @@ def main() -> None:
     duration = args.duration
     if duration is None:
         duration = None if args.web else S.DEFAULT_RUN_SECONDS
-    # 班次3修改：--rule-vision 临时关闭算法注入（优先级高于配置中心开关）
-    if args.rule_vision:
-        S.VISION_ALGO_ENABLE = False
+    # 班次3修改：--rule-vision 退回规则法判定
+    # 修复记录：改为向 Plant 传参（enable_vision_algo=False），不再改写 S.VISION_ALGO_ENABLE 全局量
     plant = Plant(speed=args.speed, mode=mode, seed=args.seed,
                   enable_random_faults=not args.no_random_faults,
-                  enable_agv=not args.no_agv)
+                  enable_agv=not args.no_agv,
+                  enable_vision_algo=not args.rule_vision)
     plant.run(duration=duration, enable_web=args.web)
 
 

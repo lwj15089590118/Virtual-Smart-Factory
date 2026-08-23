@@ -1,0 +1,45 @@
+{"seq": 1, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.474", "source": "MES-ENGINE", "type": "mes.order_created", "severity": "INFO", "data": {"wo_id": "WO-0001", "model": "虚拟组件A", "target_qty": 240, "ok": 0, "ng": 0, "total": 0, "progress_pct": 0.0, "status": "执行中", "created_at": 0.0, "closed_at": null, "batch_ids": [], "yield_pct": 0.0}}
+{"seq": 2, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 3, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 4, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 5, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "WH-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 6, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "AGV-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 7, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.476", "source": "AGV-02", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 8, "ts_sim": 0.0, "ts_wall": "2026-08-23T13:32:46.510", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "自动循环开始"}}
+{"seq": 9, "ts_sim": 31.9, "ts_wall": "2026-08-23T13:32:46.512", "source": "ASM-01", "type": "flow.product_out", "severity": "INFO", "data": {"product": {"product_id": "P00000001", "born_at": 4.9, "source_unit": "ASM-01", "qc_result": null, "qc_dim": null, "rework": false, "pallet_id": null}, "takt_s": 32.0}}
+{"seq": 10, "ts_sim": 31.9, "ts_wall": "2026-08-23T13:32:46.513", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "开始检测"}}
+{"seq": 11, "ts_sim": 34.3, "ts_wall": "2026-08-23T13:32:46.513", "source": "VIS-01", "type": "vision.ok", "severity": "INFO", "data": {"product_id": "P00000001", "ts_sim": 34.3, "result": "OK", "dim_mm": 10.0068, "nominal_mm": 10.0, "tol_mm": 0.08, "algo": "LR-v3(健康基线异常特征+逻辑回归)", "clf_p_ng": 0.0001, "rule_result": "OK", "agree_rule": true, "features": {"尺寸偏差mm": 0.007, "圆度um": 5.977, "表面得分": 83.56, "边缘锐度": 93.882}, "anomaly_scores": [0.23, 0.0, 0.79, 0.0], "hidden_defect": "无"}}
+{"seq": 12, "ts_sim": 34.3, "ts_wall": "2026-08-23T13:32:46.513", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "开始码放"}}
+{"seq": 13, "ts_sim": 34.4, "ts_wall": "2026-08-23T13:32:46.513", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "待检队列空"}}
+{"seq": 14, "ts_sim": 35.5, "ts_wall": "2026-08-23T13:32:46.513", "source": "PAL-01", "type": "pallet.box_placed", "severity": "INFO", "data": {"seq": 0, "x": 0, "y": 0, "z": 0, "px_mm": -250.0, "py_mm": -375.0, "pz_mm": 90.0, "product_id": "P00000001", "pallet_id": "PLT000000"}}
+{"seq": 15, "ts_sim": 35.6, "ts_wall": "2026-08-23T13:32:46.513", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "OK品队列空"}}
+{"seq": 16, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "door_open", "params": {}, "ok": true}}
+{"seq": 17, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "door_close", "params": {}, "ok": true}}
+{"seq": 18, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 19, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "ASM-01", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": true, "scope": "全线"}}
+{"seq": 20, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 21, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "VIS-01", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": false, "scope": "全线"}}
+{"seq": 22, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.515", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 23, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "PAL-01", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": false, "scope": "全线"}}
+{"seq": 24, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "WH-01", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 25, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "WH-01", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": false, "scope": "全线"}}
+{"seq": 26, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "AGV-01", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 27, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "AGV-01", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": false, "scope": "全线"}}
+{"seq": 28, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "AGV-02", "type": "device.state", "severity": "INFO", "data": {"state": "故障", "reason": "急停"}}
+{"seq": 29, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "AGV-02", "type": "fault.raised", "severity": "INFO", "data": {"fault_type": "急停", "origin": "interlock", "was_running": false, "scope": "全线"}}
+{"seq": 30, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "estop", "params": {}, "ok": true}}
+{"seq": 31, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 32, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "ASM-01", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 33, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 34, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "VIS-01", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 35, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 36, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.516", "source": "PAL-01", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 37, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "WH-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 38, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "WH-01", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 39, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "AGV-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 40, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "AGV-01", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 41, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "AGV-02", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "故障复位:急停"}}
+{"seq": 42, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "AGV-02", "type": "fault.cleared", "severity": "INFO", "data": {"fault_type": "急停", "duration_s": 0.0, "note": ""}}
+{"seq": 43, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "reset", "params": {}, "ok": true}}
+{"seq": 44, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "SCADA-WEB", "type": "ui.command", "severity": "INFO", "data": {"cmd": "no_such_cmd", "params": {}, "ok": false}}
+{"seq": 45, "ts_sim": 40.0, "ts_wall": "2026-08-23T13:32:46.517", "source": "ST-B2", "type": "vision.ok", "severity": "INFO", "data": {"product_id": "B2X"}}

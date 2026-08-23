@@ -69,6 +69,7 @@ python main.py --speed 60 --duration 900
 #   --seed N           随机种子（结果可复现）
 #   --no-random-faults 关闭随机故障（脚本故障保留）
 #   --no-agv           关闭车队退回班次1占位搬运（回归对照用）
+#   --rule-vision      关闭班次3视觉算法注入（退回班次1规则法，A/B 回归对照用）
 ```
 
 每个模块均可独立运行内置自检：`python core/sim_clock.py`、`python agv/agv_fleet.py`、

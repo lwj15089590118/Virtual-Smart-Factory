@@ -58,6 +58,8 @@ VISION_NOMINAL_DIM = 10.000         # 关键尺寸名义值 mm
 VISION_SIGMA = 0.04                 # 过程标准差 mm（模拟加工散布）
 VISION_TOLERANCE = 0.08             # 公差带 ±mm → 理论 NG 率 ≈ 4.6%（仿真验证值）
 VISION_RECORD_LIMIT = 10000         # 内存中最多保留的质检记录条数（防长跑爆内存）
+VISION_REJECT_PULSE_S = 1.0         # NG 剔除挡板 do_reject_gate 的保持脉宽（仿真秒）：
+                                    # 保持若干拍再复位，保证 Modbus(0.5s 刷新)/大屏能采样到该信号
 
 # ---------------------------------------------------------------
 # 3. 码垛单元（lines/unit_palletizing.py）
@@ -191,6 +193,9 @@ MES_TRACE_MAX = 20000           # 追溯索引容量上限（product/pallet 键�
 # ---------------------------------------------------------------
 # 10. 班次3新增：能源管理 EMS（ems/energy_model.py）
 # ---------------------------------------------------------------
+EMS_ENABLE = True               # EMS 总开关（同时管辖 能耗模型 + 健康监视器）：
+                                # False 时 Plant 不装配这两个模块，
+                                # Web 端 /api/ems/* 自动返回 enabled=False（回归对照用）
 # 各设备按【状态→功率kW】的功率曲线（假设：状态内功率恒定，取同类设备典型铭牌值，
 # 全部为仿真验证值）。键 = 设备号前缀；状态用 DeviceState 中文字符串，未列出按 0 计。
 EMS_POWER_KW = {
