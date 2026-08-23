@@ -348,6 +348,12 @@ class ScadaWebServer:
                 return jsonify({"ok": True, "enabled": False, "devices": []})
             return jsonify({"ok": True, "enabled": True, **hm.snapshot()})
 
+        # 静态资源禁用强缓存：前端迭代期保证浏览器刷新即得最新脚本/样式
+        @app.after_request
+        def _no_store(resp):
+            resp.headers["Cache-Control"] = "no-store, max-age=0"
+            return resp
+
         # 兜底：未知 API 返回 JSON 404（避免前端拿到 HTML 报错难排查）
         @app.errorhandler(404)
         def not_found(_e):
