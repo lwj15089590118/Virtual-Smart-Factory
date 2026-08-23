@@ -1,0 +1,14 @@
+{"seq": 1, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.824", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 2, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.825", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 3, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.825", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 4, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.825", "source": "WH-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 5, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.889", "source": "AGV-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 6, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:24.889", "source": "AGV-02", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "人工启动"}}
+{"seq": 7, "ts_sim": 0.0, "ts_wall": "2026-08-23T09:55:26.092", "source": "ASM-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "自动循环开始"}}
+{"seq": 8, "ts_sim": 31.9, "ts_wall": "2026-08-23T09:55:26.095", "source": "ASM-01", "type": "flow.product_out", "severity": "INFO", "data": {"product": {"product_id": "P00000001", "born_at": 4.9, "source_unit": "ASM-01", "qc_result": null, "qc_dim": null, "rework": false, "pallet_id": null}, "takt_s": 32.0}}
+{"seq": 9, "ts_sim": 31.9, "ts_wall": "2026-08-23T09:55:26.095", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "开始检测"}}
+{"seq": 10, "ts_sim": 34.3, "ts_wall": "2026-08-23T09:55:26.096", "source": "VIS-01", "type": "vision.ok", "severity": "INFO", "data": {"product_id": "P00000001", "ts_sim": 34.3, "result": "OK", "dim_mm": 10.0183, "nominal_mm": 10.0, "tol_mm": 0.08}}
+{"seq": 11, "ts_sim": 34.3, "ts_wall": "2026-08-23T09:55:26.096", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "运行", "reason": "开始码放"}}
+{"seq": 12, "ts_sim": 34.4, "ts_wall": "2026-08-23T09:55:26.096", "source": "VIS-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "待检队列空"}}
+{"seq": 13, "ts_sim": 35.5, "ts_wall": "2026-08-23T09:55:26.096", "source": "PAL-01", "type": "pallet.box_placed", "severity": "INFO", "data": {"seq": 0, "x": 0, "y": 0, "z": 0, "px_mm": -250.0, "py_mm": -375.0, "pz_mm": 90.0, "product_id": "P00000001", "pallet_id": "PLT000000"}}
+{"seq": 14, "ts_sim": 35.6, "ts_wall": "2026-08-23T09:55:26.096", "source": "PAL-01", "type": "device.state", "severity": "INFO", "data": {"state": "待机", "reason": "OK品队列空"}}

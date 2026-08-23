@@ -41,6 +41,11 @@ class EventTypes:
     CLOCK_RESUME = "clock.resume"          # 时钟恢复
     DOOR_HOLD = "assembly.door_hold"       # 安全门开 → 装配单元顺控保持
     DOOR_RESUME = "assembly.door_resume"   # 安全门关 → 顺控恢复
+    # ---- 班次2修改：追加 AGV 车队任务事件（只允许在此处扩展事件类型）----
+    AGV_TASK_CREATED = "agv.task_created"  # AGV 任务建档（入库/出库）
+    AGV_PHASE = "agv.phase"                # AGV 任务阶段迁移（空闲→去取货→装载→运输→交货→回位）
+    AGV_TASK_DONE = "agv.task_done"        # AGV 任务闭环完成（入库交付库口/出库送达出货口）
+    UI_COMMAND = "ui.command"              # 班次2：Web 大屏按钮命令审计（REST→Plant）
 
 
 class EventBus:
@@ -64,6 +69,13 @@ class EventBus:
             os.makedirs(log_dir, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_path = os.path.join(log_dir, f"events_{stamp}.jsonl")
+            # 班次2修改：自检B2/B3/冒烟会在同一秒内连续创建多个总线实例，
+            # 追加模式会撞名混写——存在同名文件时追加序号后缀，保证实例独占文件。
+            _n = 1
+            while os.path.exists(self._log_path):
+                self._log_path = os.path.join(log_dir,
+                                              f"events_{stamp}_{_n}.jsonl")
+                _n += 1
 
     # ------------------------------------------------------------------
     # 订阅管理

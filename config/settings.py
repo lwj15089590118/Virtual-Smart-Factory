@@ -110,8 +110,49 @@ SCRIPTED_FAULTS = [
 ]
 
 # ---------------------------------------------------------------
-# 7. 后续班次预留配置（本班次不实现，仅占位声明扩展点）
+# 7. 班次2：SCADA / AGV 配置（班次2修改：原占位段正式启用并扩参）
 # ---------------------------------------------------------------
-SCADA_HTTP_PORT = 5080        # 班次2：Flask SCADA 服务端口
-MODBUS_TCP_PORT = 1502        # 班次2：pymodbus 从站端口（对外暴露 IO 点表）
+SCADA_HTTP_PORT = 5080        # Flask SCADA 服务端口（REST + 页面）
+SCADA_WS_PORT = 5081          # WebSocket 实时推送端口（假设：与 HTTP 分端口，
+                              # 因 Flask/Werkzeug 原生不支持 WS 升级，改用标准库自研网关）
+SCADA_HTTP_HOST = "0.0.0.0"   # Web 服务监听地址（局域网演示可访问；仅本机可用 127.0.0.1）
+MODBUS_TCP_PORT = 1502        # pymodbus 从站端口（对外暴露 IO 点表）
+MODBUS_UNIT_ID = 1            # Modbus 从站单元号（single=True 模式下任意号均可响应）
+MODBUS_REG_COUNT = 2048       # 保持寄存器区总长度（4x0001~4x2048，映射表见 scada/modbus_server.py）
+MODBUS_REFRESH_S = 0.5        # 寄存器刷新周期（墙钟秒；仅用于 IO 镜像节拍，
+                              # 不参与任何仿真计时——时间纪律不受影响）
+KPI_BUCKET_S = 60.0           # KPI 趋势直方桶宽（仿真秒）：产量/NG 按此粒度聚合
+KPI_BUCKET_MAX = 240          # 趋势桶保留上限（240×60s=4 小时仿真时长滚动窗口）
+
+# ---- AGV 车队参数（agv/agv_fleet.py）----
+AGV_COUNT = 2                       # 车队规模（≥2 台，硬性要求）
+AGV_SPEED_MPS = 1.5                 # AGV 空载/满载统一速度（m/s，仿真验证值）
+AGV_LOAD_TIME_S = 4.0               # 取货点装载耗时（仿真秒）
+AGV_UNLOAD_TIME_S = 4.0             # 交货点卸载耗时（仿真秒）
+AGV_BATTERY_DRAIN_PER_M = 0.05      # 每米电量消耗%（装饰性指标，供大屏展示）
+# 厂内站点坐标（米，二维俯视图；假设：直线距离=欧氏距离，路径不绕障——
+# 与"磁条直行+二维码矫正"的简易导航模型一致，作品集演示足够）
+AGV_STATIONS = {
+    "PAL-OUT":  (6.0, 2.0),    # 码垛出口（满托取货点，入库任务起点）
+    "WH-IN":    (12.0, 2.0),   # 立体库入口（入库任务交货点）
+    "WH-OUT":   (12.0, 6.0),   # 立体库出口（出库任务取货点）
+    "SHIP":     (18.0, 6.0),   # 出货口（出库任务交货点）
+}
+AGV_HOMES = {                       # 各车待命位（回位目标；错开放置避免堵口）
+    "AGV-01": (3.0, 4.5),
+    "AGV-02": (3.0, 7.5),
+}
+# AGV 随机故障率（次/仿真小时）：低频注入，用于演示车队容错与恢复
+AGV_RANDOM_FAULT_RATES = {
+    "AGV-01": 0.4,
+    "AGV-02": 0.4,
+}
+AGV_RANDOM_FAULT_TYPES = {
+    "AGV-01": [("驱动过热", 0.6), ("导航失联", 0.4)],
+    "AGV-02": [("托盘传感器异常", 0.5), ("急停按钮误触", 0.5)],
+}
+# 出库演示：每入库 N 托自动申请 1 托 FIFO 出库（打通"出库段 AGV 运至出货口"闭环；
+# 设为 0 关闭自动出库，Web 按钮/REST 仍可手动申请）
+OUTBOUND_DEMO_EVERY_N = 3
+
 MES_SHIFT_HOURS = 8           # 班次3/MES：班次时长定义

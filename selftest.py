@@ -312,7 +312,117 @@ def case_warehouse_structs() -> str:
 
 
 # ======================================================================
-# B. 系统级冒烟：600 仿真秒加速联跑（与 main.py 同一编排路径）
+# B. 班次2 新增用例：Web API 冒烟（B2）/ AGV 任务闭环（B3）
+# ======================================================================
+def case_web_api() -> str:
+    """B2 Web API 冒烟：Flask test_client 全端点 + 命令链路 + Modbus 映射。
+    （不绑定真实端口，CI 安全；真实 HTTP/WS/Modbus 由各模块 __main__ 冒烟覆盖）"""
+    from scada.web_server import ScadaWebServer
+    from scada.modbus_server import build_register_map
+
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    srv = ScadaWebServer(plant)
+    client = srv.app.test_client()
+
+    # 1) 首页可达且为监控大屏
+    rv = client.get("/")
+    assert rv.status_code == 200 and "Virtual-Smart-Factory".encode() in rv.data, "首页异常"
+
+    # 2) 六个只读端点全通
+    endpoints = ("/api/status", "/api/kpi", "/api/events?n=20",
+                 "/api/pallet3d", "/api/warehouse/locations", "/api/modbus/map")
+    for path in endpoints:
+        rv = client.get(path)
+        assert rv.status_code == 200, f"{path} 状态码 {rv.status_code}"
+        assert rv.get_json().get("ok") is True, f"{path} ok 字段异常"
+
+    # 3) 推进 40 仿真秒后 KPI 必须出现真实产量
+    plant.clock.run_until(plant.clock.now() + 40.0)
+    kpi = client.get("/api/kpi").get_json()["kpi"]
+    assert kpi["products_out"] >= 1, f"KPI 无产量: {kpi}"
+    assert kpi["note"].startswith("所有指标均为仿真验证值")
+
+    # 4) 命令链路：开门保持 → 关门恢复 → 急停 → 复位
+    for cmd in ("door_open", "door_close", "estop", "reset"):
+        rv = client.post("/api/command", json={"cmd": cmd, "params": {}})
+        assert rv.status_code == 200 and rv.get_json()["ok"], \
+            f"命令 {cmd} 失败: {rv.get_json()}"
+    from core.device_base import DeviceState
+    assert plant.assembly.state == DeviceState.STANDBY, "复位后装配应回待机"
+    # 未知命令必须被拒绝(400)而非崩溃
+    rv = client.post("/api/command", json={"cmd": "no_such_cmd"})
+    assert rv.status_code == 400 and rv.get_json()["ok"] is False
+
+    # 5) WS 广播通路（零客户端也不得抛异常）
+    plant.bus.publish("ST-B2", EventTypes.VISION_OK, {"product_id": "B2X"})
+
+    # 6) Modbus 寄存器映射：6 设备块(4单元+2AGV)，地址不重叠
+    mb_map = build_register_map(plant.devices)
+    assert len(mb_map) >= 6, f"映射块不足: {len(mb_map)}"
+    bases = [b["base"] for b in mb_map]
+    for i in range(len(mb_map) - 1):
+        assert bases[i] < bases[i + 1], "寄存器块基址应严格递增"
+    srv.stop()
+    return (f"页面+{len(endpoints)}个API全200; 命令链路4条OK+未知命令400; "
+            f"WS广播无异常; Modbus映射{len(mb_map)}块")
+
+
+def case_agv_loop() -> str:
+    """B3 AGV 任务闭环：码垛满托 agv.call → 车队六阶段搬运 → 入库完成
+    → 手动出库申请 → AGV 运抵出货口出厂。"""
+    from lines.product import Product
+
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)      # 关随机故障保证确定性节奏
+    plant.build()
+    plant.start_up_all()
+    # 直接向码垛单元灌 96 箱 OK 品 → 恰好 2 个满托
+    # （绕过装配慢节拍；码垛→事件→车队→立体库 全链路仍走真实编排路径）
+    for i in range(96):
+        plant.palletizer.inbound.append(
+            Product(f"B3{i:08d}", born_at=plant.clock.now(), source_unit="B3-T"))
+    plant.clock.run_until(plant.clock.now() + 320.0)
+
+    # ---- 断言1：满托与 agv.call ----
+    assert len(plant.palletizer.pallets_done) == 2, \
+        f"应完成2托: {len(plant.palletizer.pallets_done)}"
+    calls = plant.bus.replay(lambda e: e["type"] == EventTypes.AGV_CALL)
+    assert len(calls) >= 2, f"agv.call 应≥2: {len(calls)}"
+
+    # ---- 断言2：车队入库任务闭环（交付库口）----
+    done_in = plant.bus.replay(lambda e: e["type"] == EventTypes.AGV_TASK_DONE
+                               and e["data"]["task_type"] == "入库")
+    assert len(done_in) >= 2, f"AGV入库任务闭环不足: {len(done_in)}"
+    w = plant.warehouse.snapshot()
+    assert w["inbound_done"] >= 2, f"立体库应已完成≥2次上架: {w['inbound_done']}"
+
+    # ---- 断言3：六阶段状态机全部出现 ----
+    phases = {e["data"]["phase"] for e in
+              plant.bus.replay(lambda e: e["type"] == EventTypes.AGV_PHASE)}
+    need = {"空闲", "去取货", "装载", "运输", "交货", "回位"}
+    assert need <= phases, f"阶段缺失: {need - phases}"
+
+    # ---- 断言4：出库段闭环（FIFO 出库 → AGV → 出厂）----
+    assert plant.warehouse.request_outbound(None), "FIFO出库申请失败"
+    plant.clock.run_until(plant.clock.now() + 90.0)
+    assert plant.agv_fleet.shipped_count == 1, \
+        f"应有1托运抵出货口: {plant.agv_fleet.shipped_count}"
+
+    # ---- 断言5：托盘守恒（班次2权威口径）----
+    lhs = plant.palletizer.snapshot()["pallets_done"]
+    bal = plant.pallet_balance()
+    assert lhs == sum(bal.values()), f"守恒失败: {lhs} vs {bal}"
+
+    fs = plant.agv_fleet.snapshot()
+    return (f"2托满托→AGV入库闭环×{len(done_in)}; 六阶段{sorted(phases)[0]}…齐全; "
+            f"出库出厂{plant.agv_fleet.shipped_count}托; 守恒{bal}")
+
+
+# ======================================================================
+# B1. 系统级冒烟：600 仿真秒加速联跑（与 main.py 同一编排路径，班次2延续）
 # ======================================================================
 def smoke_full_plant(duration: float = S.DEFAULT_RUN_SECONDS) -> str:
     plant = Plant(speed=S.DEFAULT_SPEED, mode="fast",
@@ -346,10 +456,14 @@ def smoke_full_plant(duration: float = S.DEFAULT_RUN_SECONDS) -> str:
     # 返修道 = NG 总数
     assert v["rework_len"] == v["ng"]
 
-    # ---- 不变量4：托盘守恒（完成托 = 在库 + 库口排队 + AGV在途）----
+    # ---- 不变量4：托盘守恒（班次2修改：改用 Plant.pallet_balance() 权威分解，
+    #      口径 = 在库+入库队列+AGV入库在途+出库暂存+AGV出库在途+已出厂）----
     lhs = p["pallets_done"]
-    rhs = w["stock"] + w["in_queue"] + len(plant._agv_transit)
-    assert lhs == rhs, f"托盘守恒失败: 完成托{lhs} != 库{w['stock']}+队{w['in_queue']}+途{len(plant._agv_transit)}"
+    bal = plant.pallet_balance()
+    rhs = (bal["stock"] + bal["wh_in_queue"] + bal["agv_inbound"]
+           + bal["staging"] + bal["agv_outbound_inflight"] + bal["shipped"])
+    assert lhs == rhs, \
+        f"托盘守恒失败: 完成托{lhs} != 分解{bal}"
 
     # ---- 不变量5：事件账目（raised = cleared + 生效中）----
     raised = plant.bus.replay(lambda e: e["type"] == EventTypes.FAULT_RAISED)
@@ -386,11 +500,13 @@ def write_report(smoke_detail: str, report_path: str) -> None:
     total = len(RESULTS)
     lines = [
         "=" * 78,
-        "Virtual-Smart-Factory 班次1 全厂自检报告",
+        "Virtual-Smart-Factory 班次2 全厂自检报告（班次2修改：新增B2/B3用例）",
         f"生成时间: {datetime.now().isoformat(timespec='seconds')}",
         f"环境: Python {sys.version.split()[0]} @ Windows | "
-        f"依赖: numpy/flask/pymodbus(标准库+numpy 本班次实际使用)",
-        f"配置: dt={S.SIM_DT}s | 默认倍率{S.DEFAULT_SPEED}x | 种子{S.DEFAULT_SEED}",
+        f"依赖: numpy/flask/pymodbus(标准库+numpy+flask+pymodbus 本班次实际使用)",
+        f"配置: dt={S.SIM_DT}s | 默认倍率{S.DEFAULT_SPEED}x | 种子{S.DEFAULT_SEED}"
+        f" | AGV车队{S.AGV_COUNT}台 | SCADA:{S.SCADA_HTTP_PORT}/WS:{S.SCADA_WS_PORT}"
+        f"/Modbus:{S.MODBUS_TCP_PORT}",
         "=" * 78,
         "",
         "[一] 用例结果",
@@ -412,7 +528,7 @@ def main() -> int:
     os.makedirs(S.REPORT_DIR, exist_ok=True)
 
     print("=" * 78)
-    print("Virtual-Smart-Factory 班次1 全厂自检开始（逐模块 → 10分钟加速冒烟）")
+    print("Virtual-Smart-Factory 班次2 全厂自检开始（逐模块 → Web/AGV → 10分钟加速冒烟）")
     print("=" * 78)
 
     run_case("A1", "仿真时钟引擎", case_clock)
@@ -426,6 +542,10 @@ def main() -> int:
 
     smoke_detail = "（按要求跳过）"
     if not args.skip_smoke:
+        print("\n[B2] Web API 冒烟：test_client 全端点 + 命令链路 + Modbus 映射…")
+        run_case("B2", "Web API 冒烟(REST/命令/映射)", case_web_api)
+        print("\n[B3] AGV 任务闭环：满托 agv.call → 车队搬运 → 入库 → 出库出厂…")
+        run_case("B3", "AGV 任务闭环(入库+出库)", case_agv_loop)
         print("\n[B1] 系统级冒烟：fast 加速联跑 600 仿真秒（≈真实产线10分钟）…")
         try:
             smoke_detail = smoke_full_plant()

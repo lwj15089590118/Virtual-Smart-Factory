@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<!-- =====================================================================
+web/static/index.html —— Virtual-Smart-Factory SCADA 监控大屏（班次2）
+======================================================================
+数据源：
+    - REST 轮询：/api/status(1s) /api/kpi(2s) /api/pallet3d(1s)
+                 /api/warehouse/locations(3s)
+    - WebSocket 实时推送：ws://{host}:5081/ws （事件总线通配符全量事件）
+      断线自动重连；重连失败自动降级为 REST 事件轮询。
+    - 图表：ECharts 5 + echarts-gl（bar3D 垛型），多 CDN 依次回退加载。
+所有指标均为仿真验证值。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Virtual-Smart-Factory · SCADA 监控大屏</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- ======================= 顶部：标题 + 时钟 + 控制 ======================= -->
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">▦</span>
+    <div>
+      <h1>Virtual-Smart-Factory <small>虚拟智能工厂一体化仿真平台 · 班次2 SCADA 监控层</small></h1>
+    </div>
+  </div>
+  <div class="clockbox">
+    <div class="sim-clock"><label>仿真时刻</label><span id="simClock">t=0.0s</span></div>
+    <div class="speedbox">
+      <label>倍率</label>
+      <select id="speedSel">
+        <option value="1">1x</option>
+        <option value="10" selected>10x</option>
+        <option value="30">30x</option>
+        <option value="60">60x</option>
+      </select>
+    </div>
+    <div id="runState" class="badge state-run">运行中</div>
+    <div id="wsState" class="badge ws-off">WS 未连接</div>
+  </div>
+  <div class="ctrl">
+    <button id="btnStart"   class="btn btn-green">▶ 启动</button>
+    <button id="btnPause"   class="btn btn-amber">⏸ 暂停</button>
+    <button id="btnReset"   class="btn btn-blue">↻ 复位</button>
+    <button id="btnDoorOpen"  class="btn btn-grey">🚪 开门</button>
+    <button id="btnDoorClose" class="btn btn-grey">🚪 关门</button>
+    <button id="btnOutbound"  class="btn btn-cyan">📦 手动出库</button>
+    <button id="btnEstop"   class="btn btn-red">⬤ 急停</button>
+  </div>
+</header>
+<div id="toast" class="toast"></div>
+
+<!-- ======================= KPI 指标条 ======================= -->
+<section class="kpi-strip" id="kpiStrip">
+  <div class="kpi"><label>装配流出</label><b id="kOut">0</b><i>件</i></div>
+  <div class="kpi"><label>质检 OK</label><b id="kOk">0</b><i>件</i></div>
+  <div class="kpi"><label>质检 NG</label><b id="kNg">0</b><i>件</i></div>
+  <div class="kpi warn"><label>NG 率</label><b id="kNgRate">0.0</b><i>%</i></div>
+  <div class="kpi"><label>累计码箱</label><b id="kBoxes">0</b><i>箱</i></div>
+  <div class="kpi"><label>完成托盘</label><b id="kPallets">0</b><i>托</i></div>
+  <div class="kpi"><label>立体库在库</label><b id="kStock">0</b><i>/200</i></div>
+  <div class="kpi"><label>AGV 已出厂</label><b id="kShip">0</b><i>托</i></div>
+  <div class="kpi bad"><label>故障注入</label><b id="kFaults">0</b><i>次</i></div>
+  <div class="kpi"><label>装配可用率</label><b id="kAvail">100</b><i>%</i></div>
+</section>
+
+<!-- ======================= 主网格：六面板 ======================= -->
+<main class="grid">
+
+  <!-- 面板1：工厂流程图（单元状态色块，DOM 绘制） -->
+  <section class="panel span-8">
+    <h2>① 工厂流程总览<span class="sub">单元状态色块 · 全软件仿真</span></h2>
+    <div class="flow">
+      <!-- 工艺主线 -->
+      <div class="lane">
+        <div class="node store" id="nodeSrc">
+          <b>原料库</b><span>无限供应</span>
+        </div>
+        <div class="arrow"></div>
+        <div class="node unit" id="nodeAsm">
+          <b>装配单元 ASM-01</b>
+          <span id="asmStep">步骤: -</span>
+          <div class="prog"><i id="asmProg"></i></div>
+          <em id="asmStat">停止</em>
+        </div>
+        <div class="arrow"></div>
+        <div class="node unit" id="nodeVis">
+          <b>视觉质检 VIS-01</b>
+          <span id="visCnt">OK 0 / NG 0</span>
+          <span class="mini">返修道 <i id="visRework">0</i> 件</span>
+          <em id="visStat">停止</em>
+        </div>
+        <div class="arrow" id="arrowOk"></div>
+        <div class="node unit" id="nodePal">
+          <b>码垛机器人 PAL-01</b>
+          <span id="palFill">当前垛 0/48</span>
+          <span class="mini">完成托 <i id="palDone">0</i></span>
+          <em id="palStat">停止</em>
+        </div>
+      </div>
+      <!-- 物流支线 -->
+      <div class="lane lane2">
+        <div class="node ng" id="nodeRework">返修道 <i id="reworkNum">0</i></div>
+        <div class="spacer"></div>
+        <div class="node agvnode" id="nodeAgv">
+          <b>AGV 车队</b>
+          <span id="agvBrief">待派 0 · 执行 0 · 出厂 0 托</span>
+          <em id="agvStat">空闲</em>
+        </div>
+        <div class="arrow"></div>
+        <div class="node unit" id="nodeWh">
+          <b>立体库 WH-01</b>
+          <span id="whStockTxt">在库 0/200</span>
+          <span class="mini">入队 <i id="whInQ">0</i> · 出口待运 <i id="whStaging">0</i></span>
+          <em id="whStat">停止</em>
+        </div>
+        <div class="arrow"></div>
+        <div class="node store" id="nodeShip">出货口 🚚<span id="shipNum">已出厂 0 托</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 面板2：产量/质量趋势 -->
+  <section class="panel span-4">
+    <h2>② 产量与质量趋势<span class="sub">每 60 仿真秒一桶 · 仿真验证值</span></h2>
+    <div class="chart" id="chartTrend"></div>
+  </section>
+
+  <!-- 面板3：NG率仪表盘 -->
+  <section class="panel span-3">
+    <h2>③ NG 率仪表盘<span class="sub">理论≈4.6%</span></h2>
+    <div class="chart" id="chartGauge"></div>
+  </section>
+
+  <!-- 面板4：垛型 3D -->
+  <section class="panel span-5">
+    <h2>④ 垛型 3D 回放<span class="sub" id="palletTitle">当前垛 PLT000000 · 0/48</span></h2>
+    <div class="chart" id="chartPallet"></div>
+  </section>
+
+  <!-- 面板5：库位热力图 -->
+  <section class="panel span-4">
+    <h2>⑤ 库位占用热力图
+      <select id="levelSel" class="mini-sel">
+        <option value="0" selected>汇总(各层叠加)</option>
+        <option value="1">第 1 层</option>
+        <option value="2">第 2 层</option>
+        <option value="3">第 3 层</option>
+        <option value="4">第 4 层</option>
+        <option value="5">第 5 层</option>
+      </select>
+      <span class="sub">A排×B列×C层=200 位</span>
+    </h2>
+    <div class="chart" id="chartHeat"></div>
+  </section>
+
+  <!-- 面板6：AGV 物流地图 -->
+  <section class="panel span-5">
+    <h2>⑥ AGV 物流地图<span class="sub" id="agvMapSub">2 台车 · 直线导航模型</span></h2>
+    <div class="chart" id="chartAgv"></div>
+  </section>
+
+  <!-- 面板7：实时事件滚动表（跨两列） -->
+  <section class="panel span-7">
+    <h2>⑦ 实时事件流<span class="sub" id="evtSrc">WebSocket 推送中…</span></h2>
+    <div class="evtable-wrap">
+      <table class="evtable">
+        <thead><tr><th>seq</th><th>t(s)</th><th>来源</th><th>类型</th><th>级别</th><th>内容</th></tr></thead>
+        <tbody id="evBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 面板8：设备状态一览 -->
+  <section class="panel span-5">
+    <h2>⑧ 设备状态一览<span class="sub">含 AGV · 与 Modbus 寄存器同源</span></h2>
+    <div class="devtable-wrap">
+      <table class="devtable">
+        <thead><tr><th>设备</th><th>状态</th><th>关键信息</th><th>故障</th></tr></thead>
+        <tbody id="devBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  Virtual-Smart-Factory 班次2 · Flask(5080) + WebSocket(5081) + Modbus TCP(1502) ·
+  所有指标均为<b>仿真验证值</b> · 零硬件全软件仿真
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

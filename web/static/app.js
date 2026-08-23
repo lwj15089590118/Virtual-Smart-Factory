@@ -1,0 +1,585 @@
+'use strict';
+/* =====================================================================
+web/static/app.js —— SCADA 监控大屏前端逻辑（班次2）
+======================================================================
+职责：
+    1. 多 CDN 依次回退加载 ECharts 5 与 echarts-gl（bar3D 垛型用）；
+    2. REST 轮询：/api/status(1s) /api/kpi(2s) /api/pallet3d(1s)
+       /api/warehouse/locations(3s)；
+    3. WebSocket 实时事件推送（ws://host:5081/ws），断线重连，
+       连续失败自动降级为 REST /api/events 轮询；
+    4. 六大图表/面板渲染：流程图(DOM)、趋势折线、NG率仪表盘、垛型3D、
+       库位热力图、AGV 物流地图；事件滚动表与设备一览表；
+    5. 控制按钮：POST /api/command → Plant.execute_command()。
+约定：所有产量/NG率等指标均为仿真验证值。
+====================================================================== */
+
+/* ---------------- 常量与全局 ---------------- */
+const ECHARTS_CDNS = [
+  'https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js',
+  'https://cdn.bootcdn.net/ajax/libs/echarts/5.5.0/echarts.min.js',
+  'https://unpkg.com/echarts@5.5.0/dist/echarts.min.js',
+];
+const GL_CDNS = [
+  'https://cdn.jsdelivr.net/npm/echarts-gl@2.0.9/dist/echarts-gl.min.js',
+  'https://cdn.bootcdn.net/ajax/libs/echarts-gl/2.0.9/echarts-gl.min.js',
+  'https://unpkg.com/echarts-gl@2.0.9/dist/echarts-gl.min.js',
+];
+const WS_PORT = 5081;                 // 与 config/settings.py SCADA_WS_PORT 一致
+const STATE_COLOR = {
+  '运行': '#00e676', '待机': '#ffd54f', '停止': '#90a4ae',
+  '故障': '#ff5252', '维护': '#40c4ff',
+};
+const EVT_LABEL = {
+  'device.state': '设备状态', 'fault.raised': '故障产生', 'fault.cleared': '故障清除',
+  'flow.product_out': '产品流出', 'vision.ok': '质检OK', 'vision.ng': '质检NG',
+  'pallet.box_placed': '码垛放箱', 'pallet.full': '满托完成', 'agv.call': 'AGV呼叫',
+  'agv.task_created': '任务建档', 'agv.phase': 'AGV阶段', 'agv.task_done': '任务完成',
+  'wh.inbound_done': '入库完成', 'wh.outbound_done': '出库完成',
+  'clock.pause': '时钟暂停', 'clock.resume': '时钟恢复',
+  'assembly.door_hold': '门开保持', 'assembly.door_resume': '关门恢复',
+  'ui.command': '大屏命令',
+};
+
+const charts = {};                    // echarts 实例集合
+let glReady = false;                  // echarts-gl 是否加载成功
+let ws = null;                        // WebSocket 会话
+let wsRetry = 0;                      // 重连计数（超过3次降级为轮询）
+let wsFallbackTimer = null;           // REST 降级轮询句柄
+let lastBoxesKey = '';                // 垛型去重键（减少无谓 setOption）
+let lastLocationsJson = '';           // 库位表去重
+let evSeqMax = -1;                    // 已收最大事件 seq（REST 拉取增量判断）
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------------- 启动入口 ---------------- */
+window.addEventListener('DOMContentLoaded', () => {
+  bindButtons();
+  connectWS();
+  setInterval(pollStatus, 1000);
+  setInterval(pollKpi, 2000);
+  setInterval(pollPallet, 1000);
+  setInterval(pollLocations, 3000);
+  pollStatus(); pollPallet(); pollLocations();
+  loadScripts(ECHARTS_CDNS).then((ok) => {
+    if (!ok) { toast('ECharts CDN 全部加载失败，图表降级为表格模式', true); return; }
+    initCharts();
+    refreshTrendFromCache();          // 立即画一版已缓存数据
+    drawAgvFromCache();
+    loadScripts(GL_CDNS).then((okGl) => {
+      glReady = okGl;
+      drawPalletFromCache();          // gl 就绪后重画 3D
+    });
+  });
+});
+
+/* ---------------- 脚本加载器（多 CDN 依次回退） ---------------- */
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+async function loadScripts(urls) {
+  for (const u of urls) {
+    try { await loadScript(u); return true; } catch (e) { /* 尝试下一CDN */ }
+  }
+  return false;
+}
+
+/* ---------------- 工具 ---------------- */
+function fmtSim(sec) {
+  const s = Math.floor(sec || 0);
+  const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mm = String(Math.floor(s % 3600 / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+let toastTimer = null;
+function toast(msg, isErr) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = 'toast'; }, 3500);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  return r.json();
+}
+async function sendCommand(cmd, params) {
+  try {
+    const ret = await api('/api/command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cmd, params: params || {} }),
+    });
+    toast(ret.msg || (ret.ok ? '命令已执行' : '命令被拒绝'), !ret.ok);
+    pollStatus();
+  } catch (e) {
+    toast('命令发送失败：' + e.message, true);
+  }
+}
+function bindButtons() {
+  $('btnStart').onclick     = () => sendCommand('start');
+  $('btnPause').onclick     = () => sendCommand('pause');
+  $('btnReset').onclick     = () => sendCommand('reset');
+  $('btnDoorOpen').onclick  = () => sendCommand('door_open');
+  $('btnDoorClose').onclick = () => sendCommand('door_close');
+  $('btnOutbound').onclick  = () => sendCommand('outbound');
+  $('btnEstop').onclick     = () => sendCommand('estop');
+  $('speedSel').onchange    = (e) => sendCommand('set_speed', { speed: Number(e.target.value) });
+  $('levelSel').onchange    = () => { lastLocationsJson = ''; pollLocations(); };
+}
+
+/* =====================================================================
+   REST 轮询
+==================================================================== */
+let cachedFleet = null;
+async function pollStatus() {
+  let d;
+  try { d = await api('/api/status'); } catch (e) { return; }
+  if (!d.ok) return;
+  // ---- 时钟/运行态 ----
+  $('simClock').textContent = `t=${d.ts_sim.toFixed(1)}s`;
+  $('runState').textContent = d.line_estop ? '急停锁存'
+    : (d.clock.paused ? '已暂停' : '运行中');
+  $('runState').className = 'badge ' +
+    (d.line_estop ? 'state-estop' : (d.clock.paused ? 'state-pause' : 'state-run'));
+  $('wsState').textContent = `WS ${hubCountText(d.ws_clients)}`;
+  // ---- 流程图单元节点 ----
+  renderFlow(d.units, d.agv_fleet, d.injector);
+  renderDevTable(d.units, d.agv_fleet, d.injector);
+  // ---- AGV 地图 ----
+  cachedFleet = d.agv_fleet;
+  drawAgvFromCache();
+}
+function hubCountText(n) { return n > 0 ? `已连 ${n} 端` : '无客户端'; }
+
+function setNode(elId, state) {
+  const el = $(elId);
+  el.dataset.state = state;
+  const em = el.querySelector('em');
+  if (em) { em.textContent = state; em.style.color = STATE_COLOR[state] || '#fff'; }
+}
+
+function renderFlow(units, fleet, injector) {
+  const a = units.assembly, v = units.vision,
+        p = units.palletizer, w = units.warehouse;
+  // 装配
+  setNode('nodeAsm', a.state);
+  $('asmStep').textContent = `步骤: ${a.step} ${a.step_progress}%`;
+  $('asmProg').style.width = `${a.step_progress}%`;
+  // 视觉
+  setNode('nodeVis', v.state);
+  $('visCnt').textContent = `OK ${v.ok} / NG ${v.ng}（NG率 ${(v.ng_rate * 100).toFixed(1)}%）`;
+  $('visRework').textContent = v.rework_len;
+  // 码垛
+  setNode('nodePal', p.state);
+  $('palFill').textContent = `当前垛 ${p.current_fill}`;
+  $('palDone').textContent = p.pallets_done;
+  // 立体库
+  setNode('nodeWh', w.state);
+  $('whStockTxt').textContent = `在库 ${w.stock}/${w.capacity}`;
+  $('whInQ').textContent = w.in_queue;
+  $('whStaging').textContent = w.staging;
+  // 返修支线（有 NG 才点亮）
+  const ngEl = $('nodeRework');
+  ngEl.style.borderColor = v.rework_len > 0 ? '#ff5252' : '#37586f';
+  $('reworkNum').textContent = v.rework_len;
+  // 出货口
+  if (fleet) {
+    $('agvBrief').textContent =
+      `待派 ${fleet.pending} · 执行 ${fleet.active} · 完成 ${fleet.done['入库'] || 0}入/${fleet.done['出库'] || 0}出`;
+    const busy = fleet.pending + fleet.active;
+    setNode('nodeAgv', busy > 0 ? '运行' : '待机');
+    $('shipNum').textContent = `已出厂 ${fleet.shipped} 托`;
+  }
+  // 生效中故障提示：把对应节点打上故障色（设备本身 state 已含故障）
+  void injector;
+}
+
+function renderDevTable(units, fleet, injector) {
+  const rows = [];
+  const brief = (s, txt) => ({ s, txt });
+  const a = units.assembly, v = units.vision, p = units.palletizer, w = units.warehouse;
+  rows.push(brief(a, `${a.step} ${a.step_progress}% · 流出${a.products_out}件`));
+  rows.push(brief(v, `OK${v.ok}/NG${v.ng} · 待检${v.queue_len}`));
+  rows.push(brief(p, `${p.current_fill} · 完成托${p.pallets_done}`));
+  rows.push(brief(w, `在库${w.stock}/${w.capacity} · 入${w.inbound_done}/出${w.outbound_done}`));
+  if (fleet) for (const g of fleet.agvs) {
+    rows.push({
+      s: { id: g.id, name: g.name, state: g.state, fault: g.fault },
+      txt: `相位:${g.phase} @(${g.pos[0]},${g.pos[1]})m 电量${g.battery}% 单数${g.tasks_done}`,
+    });
+  }
+  const injActive = new Set((injector.active || []).map(f => f.dev));
+  $('devBody').innerHTML = rows.map(({ s, txt }) => `
+    <tr>
+      <td>${s.id} ${s.name}</td>
+      <td class="st-${s.state}">${s.state}${injActive.has(s.id) ? ' ⚠' : ''}</td>
+      <td>${txt}</td>
+      <td>${s.fault ? `<span style="color:#ff5252">${s.fault}</span>` : '—'}</td>
+    </tr>`).join('');
+}
+
+/* ---------------- KPI 条 + 趋势 ---------------- */
+let cachedTrend = [];
+async function pollKpi() {
+  let d;
+  try { d = await api('/api/kpi'); } catch (e) { return; }
+  if (!d.ok) return;
+  const k = d.kpi;
+  $('kOut').textContent = k.products_out;
+  $('kOk').textContent = k.ok;
+  $('kNg').textContent = k.ng;
+  $('kNgRate').textContent = k.ng_rate_pct.toFixed(1);
+  $('kBoxes').textContent = k.boxes_total;
+  $('kPallets').textContent = k.pallets_done;
+  $('kStock').textContent = k.stock;
+  $('kShip').textContent = k.shipped;
+  $('kFaults').textContent = k.faults_total;
+  $('kAvail').textContent = k.availability.assembly;
+  cachedTrend = d.trend || [];
+  refreshTrendFromCache();
+  // NG率仪表盘联动（仿真验证值）
+  if (charts.gauge) {
+    charts.gauge.setOption({
+      series: [{ data: [{ value: k.ng_rate_pct, name: '累计 NG 率(仿真验证值)' }] }],
+    });
+  }
+}
+function refreshTrendFromCache() {
+  if (!charts.trend || !cachedTrend.length) return;
+  const xs = cachedTrend.map(b => fmtSim(b.t));
+  charts.trend.setOption({
+    xAxis: { data: xs },
+    series: [
+      { name: '装配流出', data: cachedTrend.map(b => b.out) },
+      { name: '质检OK', data: cachedTrend.map(b => b.ok) },
+      { name: '质检NG', data: cachedTrend.map(b => b.ng) },
+      { name: '故障注入', data: cachedTrend.map(b => b.faults) },
+    ],
+  });
+}
+
+/* ---------------- 垛型 3D ---------------- */
+let cachedPallet = null;
+async function pollPallet() {
+  let d;
+  try { d = await api('/api/pallet3d'); } catch (e) { return; }
+  if (!d.ok) return;
+  cachedPallet = d;
+  $('palletTitle').textContent =
+    `当前垛 ${d.current_pallet_id} · ${d.grid.length}/${d.capacity}`;
+  drawPalletFromCache();
+}
+function drawPalletFromCache() {
+  if (!cachedPallet) return;
+  const grid = cachedPallet.grid;
+  const key = grid.length + '@' + cachedPallet.current_pallet_id;
+  if (key === lastBoxesKey) return;
+  lastBoxesKey = key;
+  if (!charts.pallet) return;
+
+  if (glReady) {
+    // ---- 3D 模式：bar3D，坐标直接用 BOX_PLACED 的毫米坐标 ----
+    const data = grid.map(b => [b.px_mm, b.py_mm, b.pz_mm, 1]);
+    charts.pallet.clear();
+    charts.pallet.setOption({
+      tooltip: {
+        formatter: (p) => {
+          const b = grid[p.dataIndex];
+          return b ? `${b.product_id}<br>格(x,y,z)=(${b.x},${b.y},${b.z})
+                     <br>物理(${b.px_mm},${b.py_mm},${b.pz_mm})mm` : '';
+        },
+      },
+      xAxis3D: { name: 'X(mm)', min: -400, max: 400 },
+      yAxis3D: { name: 'Y(mm)', min: -550, max: 550 },
+      zAxis3D: { name: 'Z(mm)', min: 0, max: 800 },
+      grid3D: {
+        boxWidth: 90, boxDepth: 120, boxHeight: 90,
+        light: { main: { intensity: 1.1 }, ambient: { intensity: .35 } },
+        viewControl: { distance: 420, alpha: 28, beta: 40 },
+      },
+      series: [{
+        type: 'bar3D', data: data,
+        barSize: 3.2,
+        itemStyle: { color: '#27d68f', opacity: .95 },
+        shading: 'lambert',
+      }],
+    });
+  } else if (charts.pallet) {
+    // ---- 降级模式（gl 未就绪）：俯视散点，颜色=层数 ----
+    charts.pallet.clear();
+    charts.pallet.setOption({
+      title: { text: '俯视图（3D组件加载中）', left: 'center', textStyle: { color: '#7fa3bf', fontSize: 11 } },
+      tooltip: { formatter: (p) => {
+        const b = grid[p.dataIndex];
+        return b ? `${b.product_id}<br>层Z=${b.z} 格=(${b.x},${b.y})` : ''; } },
+      xAxis: { name: 'X(mm)', min: -350, max: 350 },
+      yAxis: { name: 'Y(mm)', min: -480, max: 480 },
+      series: [{
+        type: 'scatter', symbolSize: 26,
+        data: grid.map(b => ({
+          value: [b.px_mm, b.py_mm],
+          itemStyle: { color: ['#63b3ff', '#27d68f', '#ffd54f', '#ff9f43'][b.z % 4] },
+        })),
+      }],
+    });
+  }
+}
+
+/* ---------------- 库位热力图 ---------------- */
+async function pollLocations() {
+  let d;
+  try { d = await api('/api/warehouse/locations'); } catch (e) { return; }
+  if (!d.ok) return;
+  const sig = JSON.stringify([d.stock, $('levelSel').value]);
+  if (sig === lastLocationsJson) return;         // 无变化不重绘
+  lastLocationsJson = sig;
+  if (!charts.heat) return;
+  const lvl = Number($('levelSel').value);        // 0=汇总(各层叠加)
+  // 按 (排row, 列bay) 聚合占用数
+  const agg = {};
+  for (const loc of d.locations) {
+    const k = `${loc.row}-${loc.bay}`;
+    if (!(k in agg)) agg[k] = 0;
+    if (lvl === 0 ? loc.occupied : (loc.level === lvl && loc.occupied)) agg[k] += 1;
+  }
+  const cells = [];
+  for (let r = 1; r <= d.rows; r++)
+    for (let c = 1; c <= d.bays; c++)
+      cells.push([c - 1, d.rows - r, agg[`${r}-${c}`] || 0]);   // 排倒序让A排在上方
+  const maxV = lvl === 0 ? d.levels : 1;
+  charts.heat.setOption({
+    visualMap: { max: maxV },
+    series: [{ data: cells }],
+  });
+  document.querySelector('#chartHeat').parentElement
+    .querySelector('.sub').textContent =
+    `${lvl === 0 ? '各层叠加(0-' + d.levels + ')' : '第' + lvl + '层(0/1)'} · 在库 ${d.stock}/${d.capacity}`;
+}
+
+/* =====================================================================
+   WebSocket 实时事件
+==================================================================== */
+function connectWS() {
+  const url = `ws://${location.hostname}:${WS_PORT}/ws`;
+  try { ws = new WebSocket(url); } catch (e) { fallbackPollEvents(); return; }
+  ws.onopen = () => {
+    wsRetry = 0;
+    $('evtSrc').textContent = 'WebSocket 实时推送中…';
+    $('wsState').className = 'badge ws-on';
+  };
+  ws.onmessage = (m) => {
+    try {
+      const msg = JSON.parse(m.data);
+      if (msg.kind === 'event') appendEvent(msg.event);
+    } catch (e) { /* 忽略坏帧 */ }
+  };
+  ws.onclose = ws.onerror = () => {
+    $('wsState').className = 'badge ws-off';
+    wsRetry += 1;
+    if (wsRetry <= 3) setTimeout(connectWS, 2500);
+    else fallbackPollEvents();               // 降级：REST 轮询兜底
+  };
+}
+function fallbackPollEvents() {
+  if (wsFallbackTimer) return;
+  $('evtSrc').textContent = 'WS不可用，已降级为 REST 轮询(2s)';
+  wsFallbackTimer = setInterval(async () => {
+    try {
+      const d = await api('/api/events?n=30');
+      if (!d.ok) return;
+      for (const ev of d.events) appendEvent(ev, true);
+    } catch (e) { /* 服务未起 */ }
+  }, 2000);
+}
+
+/* ---------------- 事件表渲染 ---------------- */
+function summarize(ev) {
+  const d = ev.data || {};
+  switch (ev.type) {
+    case 'device.state':      return `${ev.source} → ${d.state}（${d.reason || ''}）`;
+    case 'fault.raised':      return `[${d.origin}] ${d.fault_type}`;
+    case 'fault.cleared':     return `${d.fault_type} 已复位（历时${d.duration_s}s）`;
+    case 'flow.product_out':  return `${(d.product || {}).product_id} 流出（节拍${d.takt_s}s）`;
+    case 'vision.ok':
+    case 'vision.ng':         return `${d.product_id} 判定${d.result} 尺寸=${d.dim_mm}mm`;
+    case 'pallet.box_placed': return `${(d.product_id || '')} → 格(${d.x},${d.y},${d.z})`;
+    case 'pallet.full':       return `${d.pallet_id} 满 ${d.box_count} 箱`;
+    case 'agv.call':          return `${d.pallet_id} 从${d.from}去${d.to}`;
+    case 'agv.task_created':  return `${d.task_id} ${d.task_type} ${d.pallet_id}: ${d.from_station}→${d.to_station}`;
+    case 'agv.phase':         return `${d.agv_id} ${d.prev_phase}→${d.phase}`;
+    case 'agv.task_done':     return `${d.task_id} ${d.task_type} ${d.pallet_id} 交付完成`;
+    case 'wh.inbound_done':   return `${d.pallet_id} 上架 ${d.loc_id}（在库${d.stock}）`;
+    case 'wh.outbound_done':  return `${d.pallet_id} 下架（在库${d.stock}）`;
+    case 'ui.command':        return `屏幕命令: ${d.cmd} ${JSON.stringify(d.params || {})}`;
+    default:
+      return Object.keys(d).length ? JSON.stringify(d) : '';
+  }
+}
+function appendEvent(ev, dedupe) {
+  if (dedupe && ev.seq <= evSeqMax) return;    // 降级轮询按 seq 去重
+  evSeqMax = Math.max(evSeqMax, ev.seq);
+  const tb = $('evBody');
+  const tr = document.createElement('tr');
+  tr.className = 'ev-new';
+  const sev = (ev.severity || 'INFO').toUpperCase();
+  tr.innerHTML = `
+    <td>${ev.seq}</td>
+    <td>${ev.ts_sim.toFixed(1)}</td>
+    <td>${ev.source}</td>
+    <td>${EVT_LABEL[ev.type] || ev.type}</td>
+    <td class="t-${sev.toLowerCase()}">${sev}</td>
+    <td>${summarize(ev)}</td>`;
+  tb.insertBefore(tr, tb.firstChild);
+  while (tb.rows.length > 100) tb.deleteRow(-1);
+}
+
+/* =====================================================================
+   图表初始化（ECharts 就绪后调用）
+==================================================================== */
+function initCharts() {
+  const axisStyle = {
+    axisLine: { lineStyle: { color: '#2c4a66' } },
+    axisLabel: { color: '#7fa3bf', fontSize: 10 },
+    splitLine: { lineStyle: { color: 'rgba(44,74,102,.4)' } },
+  };
+  /* ---- ② 趋势折线 ---- */
+  charts.trend = echarts.init($('chartTrend'));
+  charts.trend.setOption({
+    backgroundColor: 'transparent',
+    color: ['#29b6f6', '#00e676', '#ff5252', '#ffd54f'],
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['装配流出', '质检OK', '质检NG', '故障注入'],
+              textStyle: { color: '#7fa3bf', fontSize: 10 }, top: 0 },
+    grid: { left: 34, right: 12, top: 28, bottom: 22 },
+    xAxis: Object.assign({ type: 'category', data: [] }, axisStyle),
+    yAxis: Object.assign({ type: 'value', minInterval: 1 }, axisStyle),
+    series: [
+      { name: '装配流出', type: 'line', smooth: true, showSymbol: false, areaStyle: { opacity: .12 } },
+      { name: '质检OK', type: 'line', smooth: true, showSymbol: false },
+      { name: '质检NG', type: 'line', smooth: true, showSymbol: false },
+      { name: '故障注入', type: 'bar', barWidth: 8 },
+    ],
+  });
+
+  /* ---- ③ NG率仪表盘 ---- */
+  charts.gauge = echarts.init($('chartGauge'));
+  charts.gauge.setOption({
+    backgroundColor: 'transparent',
+    series: [{
+      type: 'gauge', min: 0, max: 15,
+      startAngle: 210, endAngle: -30,
+      progress: { show: true, width: 14, itemStyle: { color: '#ffd54f' } },
+      axisLine: { lineStyle: { width: 14, color: [[1, '#1d3247']] } },
+      axisTick: { distance: -20 },
+      splitLine: { length: 8, distance: -24, lineStyle: { color: '#7fa3bf' } },
+      axisLabel: { color: '#7fa3bf', distance: 18, fontSize: 9 },
+      pointer: { itemStyle: { color: '#ffd54f' } },
+      anchor: { show: true, size: 12 },
+      detail: {
+        valueAnimation: true, formatter: '{value}%',
+        color: '#ffd54f', fontSize: 26, offsetCenter: [0, '62%'],
+      },
+      title: { offsetCenter: [0, '88%'], color: '#7fa3bf', fontSize: 11 },
+      data: [{ value: 0, name: '累计 NG 率(仿真验证值)' }],
+    }],
+  });
+
+  /* ---- ④ 垛型（先建实例；gl 就绪后由 drawPalletFromCache 切3D）---- */
+  charts.pallet = echarts.init($('chartPallet'));
+
+  /* ---- ⑤ 库位热力图（4排×10列）---- */
+  charts.heat = echarts.init($('chartHeat'));
+  charts.heat.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { position: 'top',
+      formatter: (p) => `${String.fromCharCode(65 + (3 - p.data[1]))}排 第${p.data[0] + 1}列：占用 ${p.data[2]}` },
+    grid: { left: 46, right: 16, top: 16, bottom: 42 },
+    xAxis: Object.assign({ type: 'category', name: '列',
+      data: Array.from({ length: 10 }, (_, i) => i + 1) }, axisStyle),
+    yAxis: Object.assign({ type: 'category', name: '排',
+      data: ['D排', 'C排', 'B排', 'A排'] }, axisStyle),
+    visualMap: {
+      min: 0, max: 5, calculable: false, orient: 'horizontal',
+      left: 'center', bottom: 0, itemHeight: 60, itemWidth: 12,
+      inRange: { color: ['#123049', '#1b6b9a', '#27d68f', '#ffd54f', '#ff9f43', '#ff5252'] },
+      textStyle: { color: '#7fa3bf', fontSize: 9 },
+    },
+    series: [{
+      type: 'heatmap', data: [],
+      label: { show: true, color: '#cfe8ff', fontSize: 9 },
+      itemStyle: { borderColor: '#0b1620', borderWidth: 1 },
+    }],
+  });
+
+  /* ---- ⑥ AGV 物流地图 ---- */
+  charts.agv = echarts.init($('chartAgv'));
+  const stn = (n, x, y) => ({ name: n, value: [x, y] });
+  charts.agv.setOption({
+    backgroundColor: 'transparent',
+    tooltip: { trigger: 'item' },
+    grid: { left: 36, right: 20, top: 20, bottom: 30 },
+    xAxis: Object.assign({ type: 'value', name: 'x(m)', min: 0, max: 20 }, axisStyle),
+    yAxis: Object.assign({ type: 'value', name: 'y(m)', min: 0, max: 10 }, axisStyle),
+    series: [
+      { type: 'lines', coordinateSystem: 'cartesian2d', polyline: false,
+        data: [
+          { coords: [[6, 2], [12, 2]] },      // 入库运输道 PAL-OUT→WH-IN
+          { coords: [[12, 6], [18, 6]] },     // 出库运输道 WH-OUT→SHIP
+          { coords: [[3, 4.5], [6, 2]] },     // 待命位→码垛出口
+          { coords: [[3, 7.5], [12, 6]] },    // 待命位→库出口
+        ],
+        lineStyle: { color: 'rgba(63,167,255,.35)', width: 3, curveness: 0, type: 'dashed' },
+        silent: true },
+      { type: 'scatter', name: '站点', symbolSize: 16,
+        itemStyle: { color: '#1b6b9a', borderColor: '#63b3ff', borderWidth: 2 },
+        label: { show: true, position: 'top', color: '#7fa3bf', fontSize: 10,
+                 formatter: (p) => p.name },
+        data: [stn('码垛出口', 6, 2), stn('库入口', 12, 2),
+               stn('库出口', 12, 6), stn('出货口', 18, 6),
+               stn('待命1', 3, 4.5), stn('待命2', 3, 7.5)] },
+      { type: 'scatter', name: 'AGV-01', symbolSize: 26,
+        itemStyle: { color: '#26c6da', shadowBlur: 12, shadowColor: '#26c6da' },
+        label: { show: true, position: 'bottom', color: '#26c6da', fontSize: 10 },
+        data: [] },
+      { type: 'scatter', name: 'AGV-02', symbolSize: 26,
+        itemStyle: { color: '#ffa726', shadowBlur: 12, shadowColor: '#ffa726' },
+        label: { show: true, position: 'bottom', color: '#ffa726', fontSize: 10 },
+        data: [] },
+    ],
+  });
+
+  window.addEventListener('resize', () => {
+    for (const c of Object.values(charts)) c && c.resize();
+  });
+}
+
+/* ---------------- AGV 地图刷新（来自 /api/status 缓存） ---------------- */
+function drawAgvFromCache() {
+  if (!charts.agv || !cachedFleet) return;
+  const series = [];
+  for (let i = 0; i < 2; i++) {
+    const g = cachedFleet.agvs[i];
+    series.push(g ? [{
+      value: g.pos,
+      name: `${g.id} ${g.phase}`,
+      label: { formatter: `{a|${g.id}}\n{b|${g.phase}}`,
+               rich: { a: { color: '#cfe8ff', fontSize: 10 },
+                       b: { color: '#7fa3bf', fontSize: 9 } } },
+    }] : []);
+  }
+  charts.agv.setOption({ series: [
+    { /* lines 保持 */ },
+    { /* stations 保持 */ },
+    { name: 'AGV-01', data: series[0] },
+    { name: 'AGV-02', data: series[1] },
+  ]});
+  $('agvMapSub').textContent =
+    `${cachedFleet.agv_count} 台车 · 待派${cachedFleet.pending} · 执行${cachedFleet.active} · 已出厂${cachedFleet.shipped}托`;
+}
