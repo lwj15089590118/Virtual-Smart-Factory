@@ -373,22 +373,26 @@ function shadeHex(hex, f) {
 }
 
 function ensurePalletIsoCanvas() {
-  if (charts.pallet) { charts.pallet.dispose(); charts.pallet = null; }
+  const host = $('chartPallet');
+  // 兜底：无论内部状态如何，先确保 echarts 实例彻底离开该容器
+  const inst = echarts.getInstanceByDom(host);
+  if (inst) { inst.dispose(); charts.pallet = null; }
   if (!palletIsoCanvas) {
     palletIsoCanvas = document.createElement('canvas');
     palletIsoCanvas.style.width = '100%';
     palletIsoCanvas.style.height = '100%';
   }
-  const host = $('chartPallet');
   if (palletIsoCanvas.parentNode !== host) host.appendChild(palletIsoCanvas);
 }
 
 function leavePalletIsoCanvas() {
   if (palletIsoCanvas && palletIsoCanvas.parentNode) palletIsoCanvas.remove();
-  if (!charts.pallet) {
-    charts.pallet = echarts.init($('chartPallet'));
-    palletDrawnMode = '';       // 重新初始化后骨架需重设
-  }
+  const host = $('chartPallet');
+  // 兜底：以 dom 上真实挂载的实例为准，杜绝双实例/残留画布混叠
+  const inst = echarts.getInstanceByDom(host);
+  if (!inst) charts.pallet = echarts.init(host);
+  else charts.pallet = inst;
+  palletDrawnMode = '';         // 骨架需重设
 }
 
 function drawPalletIsoCanvas(grid) {
@@ -426,26 +430,27 @@ function drawPalletIsoCanvas(grid) {
   const cells = [...grid].sort((u, v) => (u.x + u.y + u.z) - (v.x + v.y + v.z));
   for (const b of cells) {
     const col = PALLET_LAYER_COLORS[b.z % PALLET_LAYER_COLORS.length];
-    const t0 = proj(b.x, b.y, b.z + 1);          // 顶面四角
-    const tx = proj(b.x + 1, b.y, b.z + 1);
-    const ty = proj(b.x, b.y + 1, b.z + 1);
-    const txy = proj(b.x + 1, b.y + 1, b.z + 1);
-    const rX = proj(b.x + 1, b.y, b.z);          // +x 面(右)
-    const rXY = proj(b.x + 1, b.y + 1, b.z);
-    const yY = proj(b.x, b.y + 1, b.z);          // +y 面(左)
-    // 右面(+x)：t0-tx-txy? 可见面为 tx-tyx 竖直四边形 tx,t0? 取 tx→txy底…
-    // 右面四边形: top(tx)-top(txy)-bot(rXY)-bot(rX)
+    const t0 = proj(b.x, b.y, b.z + 1);          // 顶面·前角
+    const tx = proj(b.x + 1, b.y, b.z + 1);      // 顶面·右角
+    const ty = proj(b.x, b.y + 1, b.z + 1);      // 顶面·左角
+    const txy = proj(b.x + 1, b.y + 1, b.z + 1); // 顶面·后角
+    // 面数修复：本投影(sx=(x-y)a, sy=-(x+y)b-zc)下朝向观察者的是 -y 与 -x 两面墙
+    // （屏幕法线朝下），原实现误画 +x/+y 背面墙——表现为立方体缺两个正面。
+    const f00 = proj(b.x, b.y, b.z);             // 前下角(共享底点)
+    const fx0 = proj(b.x + 1, b.y, b.z);         // -y 墙·底右
+    const fy0 = proj(b.x, b.y + 1, b.z);         // -x 墙·底左
+    // -y 墙（右前面）：f00 → fx0 → tx → t0
     ctx.beginPath();
-    ctx.moveTo(tx[0], tx[1]); ctx.lineTo(txy[0], txy[1]);
-    ctx.lineTo(rXY[0], rXY[1]); ctx.lineTo(rX[0], rX[1]); ctx.closePath();
+    ctx.moveTo(f00[0], f00[1]); ctx.lineTo(fx0[0], fx0[1]);
+    ctx.lineTo(tx[0], tx[1]); ctx.lineTo(t0[0], t0[1]); ctx.closePath();
     ctx.fillStyle = shadeHex(col, 0.62); ctx.fill();
     ctx.strokeStyle = 'rgba(11,22,32,.55)'; ctx.lineWidth = 1; ctx.stroke();
-    // 左面(+y): top(ty)-top(txy)-bot(rXY)-bot(yY)
+    // -x 墙（左前面）：f00 → fy0 → ty → t0
     ctx.beginPath();
-    ctx.moveTo(ty[0], ty[1]); ctx.lineTo(txy[0], txy[1]);
-    ctx.lineTo(rXY[0], rXY[1]); ctx.lineTo(yY[0], yY[1]); ctx.closePath();
+    ctx.moveTo(f00[0], f00[1]); ctx.lineTo(fy0[0], fy0[1]);
+    ctx.lineTo(ty[0], ty[1]); ctx.lineTo(t0[0], t0[1]); ctx.closePath();
     ctx.fillStyle = shadeHex(col, 0.42); ctx.fill(); ctx.stroke();
-    // 顶面
+    // 顶面（最亮，最后画避免被墙面盖住边缘）
     ctx.beginPath();
     ctx.moveTo(t0[0], t0[1]); ctx.lineTo(tx[0], tx[1]);
     ctx.lineTo(txy[0], txy[1]); ctx.lineTo(ty[0], ty[1]); ctx.closePath();
@@ -513,6 +518,9 @@ function drawPalletFromCache() {
         return b ? `${b.product_id}<br>层Z=${b.z} 格=(${b.x},${b.y})` : ''; } },
       xAxis: { name: 'X(mm)', min: -350, max: 350 },
       yAxis: { name: 'Y(mm)', min: -480, max: 480 },
+      // 增强：俯视图挂 inside 数据缩放——滚轮缩放、按住拖拽平移
+      dataZoom: [{ type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+                 { type: 'inside', yAxisIndex: 0, filterMode: 'none' }],
       series: [{
         type: 'scatter', symbolSize: 26,
         data: grid.map(b => ({
