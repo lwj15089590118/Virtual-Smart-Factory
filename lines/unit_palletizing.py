@@ -46,7 +46,11 @@ class UnitPalletizing(DeviceBase):
         self._pending_product: Optional[Product] = None      # 抓放中的产品
         # ---- 统计 ----
         self.boxes_total = 0                         # 累计码箱数
-        self.pallets_done: List[dict] = []           # 完成托盘档案（摘要）
+        # 完成托盘档案（摘要）：只保留最近 100 托的环形队列。
+        # 修复记录（30仿真日长跑压测发现）：原为无上限 list，每托 48 箱明细
+        # 全量留存导致内存线性增长 ≈1.8MB/天；消费方（大屏 /api/pallet3d）
+        # 只读最后一托，全量历史本就由事件 JSONL/SQLite 台账承载。
+        self.pallets_done: Deque[dict] = deque(maxlen=100)
 
     # ------------------------------------------------------------------
     # IO 点表

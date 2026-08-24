@@ -85,6 +85,9 @@ python main.py --web --speed 10
 # 加速跑批（无界面）
 python main.py --speed 60 --duration 900
 
+# 长程稳定性压测（加速挂机多"仿真日"：内存采样CSV + 守恒校验 + 自动报告）
+python soak_run.py --days 30 --sample-min 60
+
 # 常用参数
 #   --speed 1|10|60    加速倍率（接受任意正数）
 #   --web              启动大屏+WS+Modbus（默认 realtime 长驻，Ctrl+C 退出）
@@ -105,6 +108,7 @@ python main.py --speed 60 --duration 900
 Virtual-Smart-Factory/
 ├─ main.py                    编排入口（Plant 编排器 + AGV接入 + execute_command + --web）
 ├─ selftest.py                全厂自检（A1~A9 含有限料仓 + B2~B4 + C1~C4 + B1 600s联跑 = 17 用例）
+├─ soak_run.py                长程稳定性压测（多"仿真日"加速挂机：内存采样CSV+守恒校验+自动报告）【增强新增】
 ├─ pyproject.toml             工具链配置（pytest / ruff）【增强新增】
 ├─ requirements-dev.txt       开发期依赖（pytest/pytest-cov/ruff，不进运行时依赖）【增强新增】
 ├─ tests/
@@ -170,6 +174,8 @@ Virtual-Smart-Factory/
 - EMS 健康：无故障期评分 ≥98 → 全线急停40s 后 89.5 → 连续故障 46.5（跌破告警线60自动发 `ems.health_alert` 并给出维护建议）；`ems_maintain` 维护命令进出闭环
 - 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径）
 - 自检 **17/17 通过**（A1~A9 模块级含有限料仓 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
+- 长程稳定性压测（`soak_run.py`，30 个仿真日 = 2592 万拍，墙钟约 9 分钟）：流出 **79960 件**、满托 1572 托、NG 率稳定 5.6%；内存净增仅 **+23.9MB（斜率 ≈+0.8 MB/仿真日）**；质检记录环(1万)/AGV完成档(500)/追溯索引(2万) 三大防膨胀机制全部到顶平稳（追溯超限按设计丢弃 11.65 万键）；全程托盘守恒与故障账目（2756 次注入全配对）分毫不差
+- 工程质量：ruff 静态检查零告警；pytest 全量 17 用例（薄壳转接 selftest，含 600s 冒烟）秒级通过；核心产线/调度层覆盖率 74~84%（总体 65%，ws_hub/modbus 真实网络链路由模块自检覆盖）
 
 ## 七、后续班次挂接点速查
 

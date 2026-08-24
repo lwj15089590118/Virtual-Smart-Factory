@@ -22,6 +22,10 @@ python -m pytest                           # 全量 17 用例（含冒烟）
 python -m pytest -q --cov=core --cov=lines --cov=agv --cov=scada --cov=mes --cov=ems \
        --cov-report=term
 
+# 长程稳定性压测（多"仿真日"加速挂机；产出 reports/soak_report_*.txt 与 logs/soak_metrics_*.csv）
+python soak_run.py --days 30 --sample-min 60
+python soak_run.py --sim-hours 0.5 --sample-min 10 --tag calib   # 快速标定吞吐/验证链路
+
 # —— 原有入口不变 ——
 python selftest.py                         # 全厂自检 17 用例 → reports/ 报告
 python main.py --web --speed 10            # 监控大屏 http://127.0.0.1:5080
