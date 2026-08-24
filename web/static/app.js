@@ -82,11 +82,13 @@ window.addEventListener('DOMContentLoaded', () => {
     refreshTrendFromCache();          // 立即画一版已缓存数据
     drawAgvFromCache();
     loadScripts(GL_CDNS).then((okGl) => {
-      // 修复记录：脚本加载成功 ≠ 能用——bar3D 依赖 WebGL，远程桌面/虚拟机常无 GPU，
-      // WebGL 创建失败时 echarts-gl 会渲染空白。这里显式探测，不可用则锁定俯视降级模式。
+      // 修复记录（规格4⑦语义修正）：脚本加载成功 ≠ 能用——bar3D 依赖 WebGL。
+      // WebGL/加载库任一缺失时不禁用默认等距视图，仅禁用"真3D"选项：
+      // 视图循环自动跳过、绘制分发防御性回退等距，提示文案与实际行为一致。
       glReady = okGl && webglSupported();
-      if (okGl && !glReady) toast('WebGL 不可用，垛型3D已降级为俯视图', true);
-      drawPalletFromCache();          // gl 就绪后重画 3D
+      if (!okGl) toast('echarts-gl 加载失败：真3D 视图已禁用（等距/俯视不受影响）', true);
+      else if (!webglSupported()) toast('WebGL 不可用：真3D 视图已禁用（等距/俯视不受影响）', true);
+      drawPalletFromCache();          // 若当前处于可改进视图则重画
     });
   });
 });
@@ -99,6 +101,9 @@ function webglSupported() {
       (c.getContext('webgl') || c.getContext('experimental-webgl')));
   } catch (e) { return false; }
 }
+
+/* 真3D 可用性 = gl 库已加载 且 WebGL 可用（两者缺一即禁用该选项） */
+function bar3DAvailable() { return glReady && webglSupported(); }
 
 /* ---------------- 脚本加载器（多 CDN 依次回退） ---------------- */
 function loadScript(src) {
@@ -162,7 +167,7 @@ function bindButtons() {
   $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
   // 垛型面板视图切换：等距(默认·零依赖) → 真3D → 俯视 → 循环
   $('btnPalletView').onclick = () => {
-    const order = webglSupported() ? ['iso', '3d', 'top'] : ['iso', 'top'];
+    const order = bar3DAvailable() ? ['iso', '3d', 'top'] : ['iso', 'top'];
     const next = order[(order.indexOf(palletViewMode) + 1) % order.length];
     palletViewMode = next;
     palletDrawnMode = '';
@@ -527,7 +532,10 @@ function drawPalletFromCache() {
             + cachedPallet.current_pallet_id;
   if (key === lastBoxesKey) return;
 
-  if (palletViewMode === 'iso') {                // 默认：canvas 自绘等距图
+  // 真3D 仅在 gl 库+WebGL 双就绪时可达；异常组合防御性回退等距（规格4⑦语义修正）
+  const mode = (palletViewMode === '3d' && !bar3DAvailable()) ? 'iso' : palletViewMode;
+
+  if (mode === 'iso') {                          // 默认：canvas 自绘等距图
     setPalletDomMode('iso');
     lastBoxesKey = key;
     drawPalletIsoCanvas(grid);
@@ -535,11 +543,11 @@ function drawPalletFromCache() {
   }
 
   // 先确保 DOM/实例与目标模式匹配（echarts 未就绪时保持空实例，不抛错）
-  setPalletDomMode(palletViewMode);
+  setPalletDomMode(mode);
   if (!charts.pallet) return;                    // echarts 尚未加载：键不落账，下轮重试
   lastBoxesKey = key;
 
-  if (palletViewMode === '3d') {
+  if (mode === '3d') {
     /* 真3D 实时生长（设计变更：应用户要求恢复逐箱可见）：
        DOM 切换已幂等化，此处只剩纯 series 数据 merge——不再有 clear 全量重建，
        软渲染竞态的源头已移除；配合相机回填与 700ms 节流保证视角稳定、刷新平滑。
