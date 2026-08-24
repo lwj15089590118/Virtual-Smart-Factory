@@ -620,6 +620,7 @@ def case_mes_order_lifecycle() -> str:
     created = plant.bus.replay(lambda e: e["type"] == EventTypes.MES_ORDER_CREATED
                                and e["data"].get("wo_id") == wo50.wo_id)
     assert created and created[0]["data"]["target_qty"] == 50, "开单审计事件缺失"
+    n_orders_before = len(plant.mes.orders)   # =2（开局自动单 + 手动50件单）
 
     # 直灌 50 件进视觉待检队列（绕过装配慢节拍），判定→报工走真实编排；
     # 插单语义验证：报工必须全部记到新开的 50 件单，开局大单零污染
@@ -635,16 +636,28 @@ def case_mes_order_lifecycle() -> str:
     closed = plant.bus.replay(lambda e: e["type"] == EventTypes.MES_ORDER_CLOSED
                               and e["data"].get("wo_id") == wo50.wo_id)
     assert closed and closed[0]["data"]["total"] == 50, "满单关单审计事件缺失"
-    actives = [w for w in plant.mes.orders if w.status == "执行中"]
-    assert actives and actives[-1].target_qty == S.MES_DEFAULT_ORDER_QTY, \
-        "满单后应自动翻单开立默认计划量的新单"
+    # 翻单断言加强（评审规格轴#c2）：不能只看"存在 240 件执行中单"——
+    # 开局旧单同量且未关单时会平凡通过。必须证明：工单总数恰好 +1、
+    # 新单 wo_id 全新、状态执行中、且带 MES_ORDER_CREATED 审计事件。
+    assert len(plant.mes.orders) == n_orders_before + 1, \
+        (f"满单后应自动翻单开立恰好一张新单: "
+         f"{[w.wo_id for w in plant.mes.orders]}")
+    wo_new = plant.mes.orders[-1]
+    assert wo_new.status == "执行中" \
+        and wo_new.target_qty == S.MES_DEFAULT_ORDER_QTY \
+        and wo_new.wo_id not in {w.wo_id for w in plant.mes.orders[:n_orders_before]}, \
+        f"翻单新单异常: {wo_new.to_dict()}"
+    created_new = plant.bus.replay(
+        lambda e: e["type"] == EventTypes.MES_ORDER_CREATED
+        and e["data"].get("wo_id") == wo_new.wo_id)
+    assert created_new, "翻单新工单缺少 CREATED 审计事件"
     rep = plant.mes.report()
     assert rep["judged"] >= 50 and rep["ok"] + rep["ng"] == rep["judged"], \
         f"报工账目不平: {rep}"
     srv.stop()
     return (f"{wo50.wo_id} 计划50件: REST开单→插单投产(旧单{wo_first.wo_id}报工0)"
             f"→满单{wo50.total_count}件(OK{wo50.ok_count}/NG{wo50.ng_count})自动关单"
-            f"→翻单{actives[-1].wo_id}; 报表judged={rep['judged']} (仿真验证值)")
+            f"→翻单{wo_new.wo_id}(CREATED审计✓); 报表judged={rep['judged']} (仿真验证值)")
 
 
 # ======================================================================

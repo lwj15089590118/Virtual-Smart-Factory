@@ -149,30 +149,30 @@ class EnergyModel:
             self._closed_tier_yuan[name] = round(
                 self._closed_tier_yuan.get(name, 0.0) + v, 9)
 
-    def _flush_open_cost(self) -> tuple:
-        """开放段的虚拟电费/分档结算（只算不落账），返回 (元, {档:kWh}, {档:元})。"""
+    def _settle_open(self) -> tuple:
+        """开放段一次性虚拟结算（只算不落账）。
+
+        合并记录（规范轴坏味道#1）：原 _flush_open/_flush_open_cost 同构两趟遍历
+        （各自取 now、扫 _open_seg、聚合字典），snapshot() 连调两趟——
+        现单趟同时产出 每设备kWh映射 / 电费元 / {档:kWh} / {档:元}。
+        返回 (kwh_map, 电费元, {档:kWh}, {档:元})。
+        """
         now = round(self.clock.now(), 3)
+        kwh_map = dict(self._closed_kwh)
         yuan_total = 0.0
         kwh_by: Dict[str, float] = {}
         yuan_by: Dict[str, float] = {}
         for dev, (state, t0) in self._open_seg.items():
             kw = self._power_kw(dev, state)
+            dt = max(now - t0, 0.0)
+            kwh_map[dev] = round(kwh_map.get(dev, 0.0) + kw * dt / 3600.0, 6)
             y, kb, yb = tou_cost(kw, t0, now)
             yuan_total += y
             for n, v in kb.items():
                 kwh_by[n] = kwh_by.get(n, 0.0) + v
             for n, v in yb.items():
                 yuan_by[n] = yuan_by.get(n, 0.0) + v
-        return yuan_total, kwh_by, yuan_by
-
-    def _flush_open(self) -> Dict[str, float]:
-        """把未闭合段按当前时刻虚拟结算（不改已落账数字）。"""
-        now = round(self.clock.now(), 3)
-        out = dict(self._closed_kwh)
-        for dev, (state, t0) in self._open_seg.items():
-            kw = self._power_kw(dev, state)
-            out[dev] = round(out.get(dev, 0.0) + kw * max(now - t0, 0.0) / 3600.0, 6)
-        return out
+        return kwh_map, yuan_total, kwh_by, yuan_by
 
     # ------------------------------------------------------------------
     def current_kw(self, dev_id: str) -> float:
@@ -182,8 +182,7 @@ class EnergyModel:
 
     def snapshot(self) -> dict:
         """全厂能耗+分时电费快照（Web /api/ems/energy 数据源；全部为仿真验证值）。"""
-        kwh_map = self._flush_open()
-        open_yuan, open_kwh_by, open_yuan_by = self._flush_open_cost()
+        kwh_map, open_yuan, open_kwh_by, open_yuan_by = self._settle_open()
         total_kwh = sum(kwh_map.values())
         cost_yuan = self._closed_yuan + open_yuan
         # 分档台账 = 闭合段实账 + 开放段虚拟结算；档位顺序按配置表，额外档附后
