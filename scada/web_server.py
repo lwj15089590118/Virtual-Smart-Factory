@@ -15,6 +15,7 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
        GET  /api/mes/orders             工单台账 + 报工报表（产量/良率/OEE 仿真验证值）
        GET  /api/mes/batches            批次台账（?wo_id= 过滤）
        GET  /api/mes/trace?query=       产品/托盘全链路追溯反查
+       GET  /api/mes/qc_log             质检判定流水（增强：SQLite 台账查询，可组合过滤）
        GET  /api/ems/energy             全厂能耗快照（kWh/电费/CO₂ 仿真验证值）
        GET  /api/ems/health             设备健康评分 + 维护建议
     2. WebSocket 推送（端口 settings.SCADA_WS_PORT，scada/ws_hub.py 实现）：
@@ -331,6 +332,38 @@ class ScadaWebServer:
                 return jsonify({"ok": False,
                                 "msg": f"未找到与 '{query}' 相关的追溯记录"}), 404
             return jsonify({"ok": True, **hit})
+
+        # ---- 增强：质检判定流水查询（SQLite 台账，mes/sqlite_ledger.py）----
+        @app.route("/api/mes/qc_log")
+        def api_mes_qc_log():
+            """
+            质检判定流水（每件一行，id 倒序=最新在前）。过滤参数（均可组合）：
+                ?limit=50        返回条数上限（1~500，默认50）
+                ?result=OK|NG    按判定结果过滤
+                ?wo_id=WO-0002   按报工归属工单过滤
+                ?product_id=P..  按产品号精确过滤
+                ?run_id=...      按运行批次过滤（缺省跨批次取最新）
+            台账未启用/未落库时返回 enabled=False 空列表（与 /api/ems/* 风格一致）。
+            """
+            mes = getattr(plant, "mes", None)
+            led = getattr(mes, "ledger", None) if mes is not None else None
+            if led is None:
+                return jsonify({"ok": True, "enabled": False,
+                                "rows": [], "count": 0})
+            try:
+                limit = int(request.args.get("limit", 50))
+            except (TypeError, ValueError):
+                limit = 50
+            limit = max(1, min(limit, 500))
+            rows = led.query_qc(
+                limit=limit,
+                result=request.args.get("result") or None,
+                wo_id=request.args.get("wo_id") or None,
+                product_id=request.args.get("product_id") or None,
+                run_id=request.args.get("run_id") or None)
+            return jsonify({"ok": True, "enabled": True,
+                            "count": len(rows), "rows": rows,
+                            "db_path": led.db_path, "run_id": led.run_id})
 
         @app.route("/api/ems/energy")
         def api_ems_energy():

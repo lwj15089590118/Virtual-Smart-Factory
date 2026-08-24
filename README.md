@@ -53,9 +53,10 @@
 | MES 引擎 | `mes/mes_engine.py` | 订阅总线通配符 "*" 自动报工；OEE ≈ 可用率×性能率×良品率（装配单元近似口径）；工单满单自动关单翻单；产品↔托盘↔批次↔工单四级追溯反查；Web 命令按指定数量开单（插单优先投产） |
 | 订单/追溯模型 | `mes/order_model.py` | WorkOrder/Batch 数据模型 + TraceabilityIndex 追溯索引（正查/反查、托盘库位流转历史、QC 档案、容量上限防长跑爆内存） |
 | JSONL 回放 | `mes/jsonl_replay.py` | 离线回放 `logs/events_*.jsonl` 重建完整 MES 台账（与在线台账一致性已入自检 C2）；CLI 直接输出报工报表 |
+| SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库 |
 | 能耗模型 | `ems/energy_model.py` | 订阅 device.state 按【状态→功率kW】曲线分段积分 kWh（未闭合段快照时虚拟结算）；电费按尖峰平谷分时电价（谷0.35/平0.65/峰1.05 元/kWh，可配/可关）跨档自动切分子段计价并输出分档台账，另折算 CO₂，全部为仿真验证值 |
 | 健康监视 | `ems/health_monitor.py` | 滚动窗口提取 故障次数/停机占比/平均恢复时长/启停切换 → 扣分制 0~100 健康分 + 四级维护建议；跌破阈值发 `ems.health_alert`（滞回防抖）；`ems_maintain / ems_maintain_done` 维护命令闭环（触发 `DeviceBase.enter_maintenance()` 预留接口） |
-| 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/ems/energy /api/ems/health`；面板⑨ MES 工单与追溯（支持产品号/托盘号查询）、面板⑩ 能耗·设备健康度 |
+| 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/mes/qc_log /api/ems/energy /api/ems/health`（qc_log 为 SQLite 台账判定流水查询，支持 limit/result/wo_id/product_id/run_id 组合过滤）；面板⑨ MES 工单与追溯（支持产品号/托盘号查询）、面板⑩ 能耗·设备健康度 |
 
 ## 四、安装与启动
 
@@ -125,6 +126,7 @@ Virtual-Smart-Factory/
 ├─ mes/                       【班次3新增】制造执行系统
 │  ├─ order_model.py          工单/批次数据模型 + 产品→托盘→批次→工单追溯索引
 │  ├─ mes_engine.py           MES 引擎（事件驱动自动报工/OEE近似/四级追溯反查）
+│  ├─ sqlite_ledger.py        MES 台账 SQLite 落库（orders/qc_log 两表 + /api/mes/qc_log 查询）
 │  └─ jsonl_replay.py         JSONL 回放器（离线重建 MES 台账 + CLI 报告）
 ├─ ems/                       【班次3新增】能源与健康管理
 │  ├─ energy_model.py         设备能耗模型（状态功率曲线分段积分 → kWh/电费/CO₂）

@@ -702,7 +702,9 @@ def case_ems_energy_health() -> str:
 
 def case_mes_order_lifecycle() -> str:
     """C4 指定数量订单全生命周期：REST 命令开立 50 件工单 → 插单优先投产
-    （旧工单零污染）→ 满单自动关单（审计事件）→ 自动翻单开新单。"""
+    （旧工单零污染）→ 满单自动关单（审计事件）→ 自动翻单开新单；
+    增强：同步断言 SQLite 台账落库（orders/qc_log 两表账目一致 +
+    /api/mes/qc_log 查询端点全链路）。"""
     plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
                   enable_random_faults=False)
     plant.build()
@@ -753,10 +755,53 @@ def case_mes_order_lifecycle() -> str:
     rep = plant.mes.report()
     assert rep["judged"] >= 50 and rep["ok"] + rep["ng"] == rep["judged"], \
         f"报工账目不平: {rep}"
+
+    # ---- 断言6（增强）：SQLite 台账落库——orders/qc_log 两表 + /api/mes/qc_log 端点 ----
+    led = plant.mes.ledger
+    assert led is not None, "默认配置(MES_SQLITE_ENABLE=True)应已装配 SQLite 台账"
+    assert os.path.exists(led.db_path), f"台账数据库文件应已生成: {led.db_path}"
+    # orders 表：50件单落库行与内存台账逐字段一致（按 run_id 隔离，防跨用例串档）
+    orows = {r["wo_id"]: r for r in led.query_orders(run_id=led.run_id)}
+    r50 = orows.get(wo50.wo_id)
+    assert r50 is not None, f"orders 表缺工单行: {sorted(orows)}"
+    assert (r50["status"] == "已完成" and r50["target_qty"] == 50
+            and r50["total"] == 50 and r50["ok_count"] == wo50.ok_count
+            and r50["ng_count"] == wo50.ng_count
+            and r50["closed_at"] is not None), \
+        f"orders 落库行与内存台账不一致: {r50} vs {wo50.to_dict()}"
+    # qc_log 表：行数=内存报工判定总数；NG 过滤与工单归属过滤口径一致
+    n_judged = rep["ok"] + rep["ng"]
+    n_rows = led.count_qc(run_id=led.run_id)
+    assert n_rows == n_judged, \
+        f"qc_log 行数应等于报工判定数: {n_rows} vs {n_judged}"
+    assert led.count_qc(run_id=led.run_id, result="NG") == rep["ng"], \
+        "qc_log 按 result=NG 过滤计数应等于内存 NG 总数"
+    assert led.count_qc(run_id=led.run_id, wo_id=wo50.wo_id) == 50, \
+        "50件工单名下的判定流水应为恰好50行"
+    # REST 端点全链路：默认列表（最新在前，跨 run 取最新，故显式带 run_id 断言本 run 口径）
+    rv_all = client.get(f"/api/mes/qc_log?run_id={led.run_id}")
+    j_all = rv_all.get_json()
+    assert rv_all.status_code == 200 and j_all["ok"] and j_all["enabled"] \
+        and j_all["run_id"] == led.run_id \
+        and j_all["count"] == min(n_judged, 50) \
+        and all(r["product_id"] for r in j_all["rows"]), \
+        f"/api/mes/qc_log 默认查询异常: count={j_all.get('count')}"
+    rv_ng = client.get(f"/api/mes/qc_log?result=NG&limit=10&run_id={led.run_id}")
+    j_ng = rv_ng.get_json()
+    assert rv_ng.status_code == 200 and j_ng["ok"] \
+        and len(j_ng["rows"]) == min(rep["ng"], 10) \
+        and all(r["result"] == "NG" for r in j_ng["rows"]), \
+        f"/api/mes/qc_log NG 过滤异常: {j_ng.get('count')}"
+    rv_def = client.get("/api/mes/qc_log?limit=5")   # 无过滤默认路径（跨 run 取最新）
+    j_def = rv_def.get_json()
+    assert rv_def.status_code == 200 and j_def["ok"] \
+        and len(j_def["rows"]) <= 5, "/api/mes/qc_log 默认无参查询异常"
+
     srv.stop()
     return (f"{wo50.wo_id} 计划50件: REST开单→插单投产(旧单{wo_first.wo_id}报工0)"
             f"→满单{wo50.total_count}件(OK{wo50.ok_count}/NG{wo50.ng_count})自动关单"
-            f"→翻单{wo_new.wo_id}(CREATED审计✓); 报表judged={rep['judged']} (仿真验证值)")
+            f"→翻单{wo_new.wo_id}(CREATED审计✓); 报表judged={rep['judged']}; "
+            f"SQLite落库 orders={len(orows)}单/qc_log={n_rows}行(端点OK) (仿真验证值)")
 
 
 # ======================================================================

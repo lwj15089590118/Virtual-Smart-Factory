@@ -208,6 +208,8 @@ MES_DEFAULT_ORDER_QTY = 240     # 首张工单计划数量（件）；约 5 满�
 MES_PRODUCT_MODEL = "虚拟组件A"  # 当前产线唯一产品型号（作品集简化假设）
 MES_BATCH_PALLETS = 2           # 批次粒度：每 N 托为一个生产批次（工单→批次→托盘三级）
 MES_TRACE_MAX = 20000           # 追溯索引容量上限（product/pallet 键数，防长跑爆内存）
+MES_SQLITE_ENABLE = True        # 台账落库开关（sqlite3 为 Python 标准库，不新增第三方依赖）
+MES_DB_PATH = "logs/mes.db"     # SQLite 文件路径（logs/ 已被 .gitignore 忽略，不入库）
 
 # ---------------------------------------------------------------
 # 10. 班次3新增：能源管理 EMS（ems/energy_model.py）

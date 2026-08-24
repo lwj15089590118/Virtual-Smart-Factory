@@ -433,6 +433,8 @@ class Plant:
                   f"良率{rep['quality_pct']}% | 可用{rep['availability_pct']}% "
                   f"性能{rep['performance_pct']}% OEE≈{rep['oee_pct']}% | "
                   f"工单{len(self.mes.orders)}张 满托{rep['pallets_done']} 出厂{rep['shipped']}")
+            # 增强：规范关闭 SQLite 台账连接（写入均已即时 commit，此处仅收尾）
+            self.mes.close()
         # 班次3修改：终报追加 EMS 能耗/健康摘要（均为仿真验证值）
         if getattr(self, "ems_energy", None) is not None:
             es = self.ems_energy.snapshot()

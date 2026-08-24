@@ -7,6 +7,8 @@ mes/mes_engine.py —— MES 引擎：自动报工 + 追溯 + OEE 近似口径�
        按事件类型增量维护 工单/批次/托盘/产品 台账与故障停机台账；
        离线模式（plant=None，供 JSONL 回放）复用同一 ingest() 逻辑，
        保证"在线台账 == 回放重建台账"；
+       增强：在线模式下同步落库 SQLite 台账（mes/sqlite_ledger.py，
+       orders 工单档案 + qc_log 判定流水；S.MES_SQLITE_ENABLE 可关闭）。
     2. 报工口径（全部为仿真验证值）：
        - 良率 Q = 质检 OK / (OK+NG)（以 vision 判定事件为准）；
        - 可用率 A = 1 - Σ故障停机时长/窗口时长（fault.raised/cleared 配对记账）；
@@ -65,7 +67,20 @@ class MESEngine:
         self._max_ts = 0.0
         # ---- 订阅（在线模式）----
         self._token = None
+        # ---- 增强：SQLite 台账落库句柄（无条件先置 None：
+        #      离线回放/自动补单路径的 create_order 也要安全引用该属性）----
+        self.ledger = None
         if self.bus is not None:
+            # 增强：在线模式且开关开启时装配落库器；MESEngine(None) 无总线
+            #      → 恒为 None 不落库（见 sqlite_ledger 假设记录）
+            if S.MES_SQLITE_ENABLE:
+                from mes.sqlite_ledger import MesSqliteLedger   # 局部导入：离线模式零开销
+                try:
+                    self.ledger = MesSqliteLedger(S.MES_DB_PATH)
+                    print(f"[MES 台账] SQLite 落库已启用 → {S.MES_DB_PATH} "
+                          f"(run_id={self.ledger.run_id})")
+                except Exception as exc:        # 初始化失败降级为纯内存台账，不阻断仿真
+                    print(f"[MES 台账] SQLite 初始化失败（退回内存台账）: {exc}")
             self._token = self.bus.subscribe("*", self.ingest, "MES引擎")
             self.create_order(S.MES_DEFAULT_ORDER_QTY)   # 开局首张工单（含审计事件）
 
@@ -86,6 +101,8 @@ class MESEngine:
         self._wo_seq += 1
         wo = WorkOrder(f"WO-{self._wo_seq:04d}", model, int(qty), self._now())
         self.orders.append(wo)
+        if self.ledger is not None:
+            self.ledger.upsert_order(wo)            # 增强：开单即落库建档
         if self.bus is not None:
             self.bus.publish("MES-ENGINE", EventTypes.MES_ORDER_CREATED,
                              dict(wo.to_dict()), severity="INFO")
@@ -107,6 +124,8 @@ class MESEngine:
         """关单 + 广播审计事件。"""
         wo.status = "已完成"
         wo.closed_at = self._now()
+        if self.ledger is not None:
+            self.ledger.upsert_order(wo)            # 增强：满单关单状态落库
         if self.bus is not None:
             self.bus.publish("MES-ENGINE", EventTypes.MES_ORDER_CLOSED,
                              dict(wo.to_dict()), severity="INFO")
@@ -147,6 +166,9 @@ class MESEngine:
                 wo.ng_count += 1
                 self.stat_ng += 1
             self.index.record_qc(pid, d, ts)
+            if self.ledger is not None:
+                # 增强：判定流水落库（含归属工单号；行数应恒等于 stat_ok+stat_ng）
+                self.ledger.record_qc(d, wo.wo_id, ts)
             if wo.total_count >= wo.target_qty and wo.status == "执行中":
                 self._close_order(wo)
                 self.create_order(S.MES_DEFAULT_ORDER_QTY)   # 自动翻单
@@ -274,10 +296,13 @@ class MESEngine:
                     hit["pallet_id"] if kind == "产品" else query)}
 
     def close(self) -> None:
-        """退订总线（程序退出时调用）。"""
+        """退订总线并关闭 SQLite 台账连接（程序退出时调用）。"""
         if self.bus is not None and self._token is not None:
             self.bus.unsubscribe(self._token)
             self._token = None
+        if getattr(self, "ledger", None) is not None:
+            self.ledger.close()
+            self.ledger = None
 
 
 # ----------------------------------------------------------------------
