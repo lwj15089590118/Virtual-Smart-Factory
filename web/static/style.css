@@ -242,6 +242,10 @@ td.t-error   { color: var(--red); }
 .qc-title { font-size: 11px; color: var(--ink-dim); letter-spacing: .5px; }
 .qc-head .sub { margin-left: auto; font-size: 10px; }
 .qctable td { font-size: 11px; padding: 3px 8px; }
+/* 增强：流水行可点击（点击 → 产品号填入追溯框），选中行高亮跨轮询保持 */
+.qctable tbody tr { cursor: pointer; }
+.qctable tr.qc-selected { background: rgba(41,182,246,.16);
+  box-shadow: inset 3px 0 0 var(--accent); }
 .qc-empty { color: var(--ink-dim); text-align: center; font-family: inherit; }
 .qc-badge {
   display: inline-block; min-width: 30px; text-align: center;

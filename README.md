@@ -56,7 +56,7 @@
 | SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库 |
 | 能耗模型 | `ems/energy_model.py` | 订阅 device.state 按【状态→功率kW】曲线分段积分 kWh（未闭合段快照时虚拟结算）；电费按尖峰平谷分时电价（谷0.35/平0.65/峰1.05 元/kWh，可配/可关）跨档自动切分子段计价并输出分档台账，另折算 CO₂，全部为仿真验证值 |
 | 健康监视 | `ems/health_monitor.py` | 滚动窗口提取 故障次数/停机占比/平均恢复时长/启停切换 → 扣分制 0~100 健康分 + 四级维护建议；跌破阈值发 `ems.health_alert`（滞回防抖）；`ems_maintain / ems_maintain_done` 维护命令闭环（触发 `DeviceBase.enter_maintenance()` 预留接口） |
-| 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/mes/qc_log /api/ems/energy /api/ems/health`（qc_log 为 SQLite 台账判定流水查询，支持 limit/result/wo_id/product_id/run_id 组合过滤）；面板⑨ MES 工单与追溯（支持产品号/托盘号查询 + qc_log 判定流水小表，可按 OK/NG 过滤）、面板⑩ 能耗·设备健康度 |
+| 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/mes/qc_log /api/ems/energy /api/ems/health`（qc_log 为 SQLite 台账判定流水查询，支持 limit/result/wo_id/product_id/run_id 组合过滤）；面板⑨ MES 工单与追溯（支持产品号/托盘号查询 + qc_log 判定流水小表，可按 OK/NG 过滤、点击流水行自动填入追溯框）、面板⑩ 能耗·设备健康度 |
 
 ## 四、安装与启动
 

@@ -173,6 +173,18 @@ function bindButtons() {
   $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
   // 增强：qc_log 流水小表过滤切换（立即重拉一次）
   $('qcFilter').onchange    = () => pollMes();
+  // 增强：点击流水行 → 产品号自动填入追溯框并聚焦（回车即查）；
+  // 事件委托挂在 tbody 上，innerHTML 重渲染不丢监听；选中行高亮跨轮询保持
+  $('qcLogBody').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-pid]');
+    if (!tr || !tr.dataset.pid) return;          // 占位空行/无产品号不响应
+    qcSelectedPid = tr.dataset.pid;
+    for (const r of $('qcLogBody').rows)
+      r.classList.toggle('qc-selected', r === tr);
+    $('traceInput').value = qcSelectedPid;
+    $('traceInput').focus();
+    toast(`已填入 ${qcSelectedPid}（回车或点🔍追溯）`);
+  });
   // 垛型面板视图切换：等距(默认·零依赖) → 真3D → 俯视 → 循环
   $('btnPalletView').onclick = () => {
     const order = bar3DAvailable() ? ['iso', '3d', 'top'] : ['iso', 'top'];
@@ -927,6 +939,7 @@ function drawAgvFromCache() {
 let energyCache = { devices: [] };      // 能耗面板缓存（图表 tooltip 用）
 
 const QC_ROW_LIMIT = 8;                 // 流水小表行数上限（面板空间有限，最新在前）
+let qcSelectedPid = '';                 // 增强：流水表当前选中产品号（跨轮询保持高亮）
 
 async function pollMes() {
   await Promise.all([pollMesOrders(), pollQcLog()]);
@@ -976,7 +989,7 @@ function renderQcLog(d) {
   }
   $('qcCount').textContent = `最新 ${d.rows.length} 条 · 最新在前`;
   tb.innerHTML = d.rows.map((r) => `
-    <tr>
+    <tr data-pid="${r.product_id || ''}"${r.product_id === qcSelectedPid ? ' class="qc-selected"' : ''}>
       <td>${(r.ts_sim ?? 0).toFixed(1)}</td>
       <td>${r.product_id || '—'}</td>
       <td><span class="qc-badge ${r.result === 'NG' ? 'qc-ng' : 'qc-ok'}">${r.result || '—'}</span></td>
