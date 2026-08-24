@@ -51,6 +51,9 @@ const EVT_LABEL = {
   // 班次3修改：MES/EMS 事件中文名
   'mes.order_created': '工单开立', 'mes.order_closed': '工单关单',
   'ems.health_alert': '健康告警', 'ems.maintenance': '维护动作',
+  // 增强：AGV 回充排程事件中文名
+  'agv.low_battery': '低电量告警', 'agv.charge_start': '开始充电',
+  'agv.charge_done': '充电完成',
 };
 
 const charts = {};                    // echarts 实例集合

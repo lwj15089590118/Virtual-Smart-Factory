@@ -53,6 +53,11 @@ class EventTypes:
     EMS_HEALTH_ALERT = "ems.health_alert"    # 健康分跌破阈值告警（含评分与维护建议）
     EMS_MAINTENANCE = "ems.maintenance"      # 维护动作执行审计（enter_maintenance 触发留痕）
 
+    # ---- 增强：AGV 回充排程事件（低电量调度全程可观测）----
+    AGV_LOW_BATTERY = "agv.low_battery"      # 低电量触发回充决策（含当前电量%）
+    AGV_CHARGE_START = "agv.charge_start"    # 到达充电位开始充电
+    AGV_CHARGE_DONE = "agv.charge_done"      # 充电达标离开充电位
+
 
 class EventBus:
     """进程内发布/订阅总线 + JSONL 落盘。"""

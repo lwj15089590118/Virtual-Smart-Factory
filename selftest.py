@@ -423,6 +423,57 @@ def case_agv_loop() -> str:
             f"出库出厂{plant.agv_fleet.shipped_count}托; 守恒{bal}")
 
 
+def case_agv_recharge() -> str:
+    """B4 AGV 低电量回充排程：单工位互斥派位 → 任务优先不中断 → 滞回充满让位轮换。"""
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    fl = plant.agv_fleet
+    a1, a2 = fl.agvs["AGV-01"], fl.agvs["AGV-02"]
+
+    def advance_until(cond, max_s: float) -> bool:
+        """小步推进直至条件满足或超时（确定性边界内轮询）。"""
+        deadline = plant.clock.now() + max_s
+        while plant.clock.now() < deadline:
+            if cond():
+                return True
+            plant.clock.run_until(plant.clock.now() + 1.0)
+        return cond()
+
+    # ---- 阶段1：两台同时低电量，单工位只派一台（花名册序）----
+    a1.battery = S.AGV_BATTERY_LOW - 5
+    a2.battery = S.AGV_BATTERY_LOW - 10
+    plant.clock.run_until(plant.clock.now() + 2.0)
+    assert fl.charge_occupant == "AGV-01", \
+        f"应按花名册先派 AGV-01 回充: {fl.charge_occupant}"
+    assert a1.phase in ("去充电", "充电中"), f"AGV-01 相位异常: {a1.phase}"
+    assert a2.phase == "空闲", f"单工位互斥被破坏: a2 相位 {a2.phase}"
+
+    # ---- 阶段2：真实运输任务优先，由未充电的 AGV-02 承接；充电车不受扰 ----
+    fl.on_agv_call({"data": {"pallet_id": "CHG-T1"}})   # 直呼建档入库任务
+    ok = advance_until(lambda: a2.phase in ("运输", "交货")
+                       and a2.current_task is not None, 25)
+    assert ok, f"任务未被空闲车承接: a2={a2.phase}"
+    assert a1.phase in ("去充电", "充电中"), "回充行程不应被派单打断"
+
+    # ---- 阶段3：a1 充至恢复阈值后让位归位 ----
+    ok = advance_until(lambda: a1.phase == "空闲"
+                       and a1.battery >= S.AGV_BATTERY_OK - 0.01, 45)
+    assert ok, f"a1 未按时充满归位: phase={a1.phase} battery={a1.battery}"
+
+    # ---- 阶段4：轮换——a2 仍低于阈值则获得充电位；或已涓流越阈则豁免 ----
+    ok = advance_until(
+        lambda: fl.charge_occupant == "AGV-02"
+        or a2.battery >= S.AGV_BATTERY_OK, 90)
+    assert ok, (f"a2 未轮到回充: occupant={fl.charge_occupant} "
+                f"bat={a2.battery}")
+    rep = fl.snapshot()
+    return (f"双车低电: 先派AGV-01(单工位互斥) → 任务由空闲车承接 → "
+            f"a1充至{round(a1.battery, 1)}%让位 → 轮换完成; "
+            f"车队done={rep['done']} (仿真验证值)")
+
+
 # ======================================================================
 # C. 班次3修改：新增用例 C1 视觉算法指标 / C2 MES 追溯闭环 / C3 EMS 合理性
 # ======================================================================
@@ -788,6 +839,8 @@ def main() -> int:
         run_case("B2", "Web API 冒烟(REST/命令/映射)", case_web_api)
         print("\n[B3] AGV 任务闭环：满托 agv.call → 车队搬运 → 入库 → 出库出厂…")
         run_case("B3", "AGV 任务闭环(入库+出库)", case_agv_loop)
+        print("\n[B4] AGV 低电量回充排程：单工位互斥 / 任务优先 / 滞回轮换…")
+        run_case("B4", "AGV 回充排程(低电触发)", case_agv_recharge)
         # ---- 班次3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性 / 订单全生命周期）----
         print("\n[C1] 视觉算法指标：三方 A/B 对照达标 + judge 注入在线混淆矩阵…")
         run_case("C1", "视觉算法指标达标(A/B对照)", case_vision_algo)

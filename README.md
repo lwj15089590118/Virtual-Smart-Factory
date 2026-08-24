@@ -35,7 +35,7 @@
 | WebSocket 网关 | `scada/ws_hub.py` | 纯标准库 RFC6455 实现（握手/文本帧/PingPong/Close，长帧三档长度）；每客户端有界发送队列；慢客户端丢帧不阻塞仿真 |
 | SCADA Web 服务 | `scada/web_server.py` | Flask REST：`/api/status /api/kpi /api/events /api/pallet3d /api/warehouse/locations /api/modbus/map`；POST `/api/command` 命令入口（带 ui.command 审计事件）；订阅总线通配符 "*" 实时 WS 推送；KPI 趋势分桶聚合 |
 | Modbus TCP 从站 | `scada/modbus_server.py` | pymodbus 把全部设备 io_table 映射为保持寄存器（状态码/故障标志/DI/DO/AI×100 定标）；DO/AO 支持写回设备；寄存器映射表可经 `/api/modbus/map` 导出给组态软件 |
-| AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系 |
+| AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系；低电量自动回充排程（<25% 触发·单工位互斥·充至 70% 返岗·任务优先不中断） |
 | 监控大屏 | `web/static/*` | ECharts(本地 vendor 优先 + CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型三视图(等距自绘/真3D/俯视)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
 
 ## 三、班次3 新增能力（视觉算法 + MES 制造执行 + EMS 能源/健康管理）
@@ -59,7 +59,7 @@
 # 环境：Windows 10 + Python 3.12
 pip install -r requirements.txt      # numpy/flask/pymodbus
 
-# 全厂自检（A模块级 + B Web/AGV冒烟 + C 算法/MES/EMS/订单生命周期 共15用例 + 600s 加速联跑，报告到 reports/）
+# 全厂自检（A模块级 + B Web/AGV/回充排程冒烟 + C 算法/MES/EMS/订单生命周期 共16用例 + 600s 加速联跑，报告到 reports/）
 python selftest.py
 
 # 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
@@ -93,7 +93,7 @@ python main.py --speed 60 --duration 900
 ```
 Virtual-Smart-Factory/
 ├─ main.py                    编排入口（Plant 编排器 + AGV接入 + execute_command + --web）
-├─ selftest.py                全厂自检（A1~A8 + B2 Web冒烟 + B3 AGV闭环 + C1~C4 + B1 600s联跑 = 15 用例）
+├─ selftest.py                全厂自检（A1~A8 + B2 Web冒烟 + B3 AGV闭环 + B4 回充排程 + C1~C4 + B1 600s联跑 = 16 用例）
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/
@@ -153,7 +153,7 @@ Virtual-Smart-Factory/
 - EMS 能耗：功率曲线分段积分精确（60s×12kW=0.200kWh，误差<0.01）；电费按尖峰平谷分时计价（谷0.35/平0.65/峰1.05 元/kWh），状态段跨档自动切分，分档电费合计=总电费；CO₂ 按 0.5568 kg/kWh 折算
 - EMS 健康：无故障期评分 ≥98 → 全线急停40s 后 89.5 → 连续故障 46.5（跌破告警线60自动发 `ems.health_alert` 并给出维护建议）；`ems_maintain` 维护命令进出闭环
 - 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径）
-- 自检 **15/15 通过**（A1~A8 模块级 + B2 Web 冒烟 + B3 AGV 闭环 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
+- 自检 **16/16 通过**（A1~A8 模块级 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
 
 ## 七、后续班次挂接点速查
 

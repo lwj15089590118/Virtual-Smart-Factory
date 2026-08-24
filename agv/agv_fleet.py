@@ -68,13 +68,15 @@ class AGVTask:
         }
 
 
-# 阶段常量（题目要求的六阶段状态机；用中文串便于直接上屏）
+# 阶段常量（六阶段任务状态机 + 回充排程两相位；用中文串便于直接上屏）
 PH_IDLE = "空闲"
 PH_TO_PICK = "去取货"
 PH_LOAD = "装载"
 PH_TRANSPORT = "运输"
 PH_DELIVER = "交货"
 PH_RETURN = "回位"
+PH_TO_CHARGE = "去充电"      # 增强：低电量驶向共享充电位
+PH_CHARGING = "充电中"       # 增强：接驳充电桩补能（≥AGV_BATTERY_OK 离站）
 
 
 class AGV(DeviceBase):
@@ -93,6 +95,7 @@ class AGV(DeviceBase):
         self._timer = 0.0                        # 当前阶段已耗时（装载/交货用）
         self.tasks_done = 0                      # 完成任务数（统计）
         self.distance_m = 0.0                    # 累计行驶里程（米，统计）
+        self._return_from_charge = False         # 回充达标归位标记（不计运输任务数）
 
     # ------------------------------------------------------------------
     # IO 点表（映射进 Modbus 保持寄存器区，供第三方 SCADA 观测）
@@ -165,13 +168,27 @@ class AGV(DeviceBase):
     def _sync_io(self) -> None:
         """把位置/电量/载货状态镜像到 IO 点表（供 Modbus/Web 快照）。"""
         self.set_io("ai_speed",
-                    S.AGV_SPEED_MPS if self.phase in (PH_TO_PICK, PH_TRANSPORT, PH_RETURN) else 0.0)
+                    S.AGV_SPEED_MPS if self.phase in (PH_TO_PICK, PH_TRANSPORT,
+                                                      PH_RETURN, PH_TO_CHARGE)
+                    else 0.0)
         self.set_io("ai_battery", round(self.battery, 1))
         self.set_io("ai_pos_x", round(self.pos[0], 2))
         self.set_io("ai_pos_y", round(self.pos[1], 2))
         loaded = 1 if (self.current_task is not None
                        and self.phase in (PH_TRANSPORT, PH_DELIVER)) else 0
         self.set_io("di_loaded", loaded)
+
+    # ------------------------------------------------------------------
+    # 回充排程（增强）：车队调度器下发指令的唯一入口
+    # ------------------------------------------------------------------
+    def begin_charge_trip(self) -> None:
+        """驶向共享充电位并补能至 AGV_BATTERY_OK（仅空闲车可被指派）。"""
+        assert self.phase == PH_IDLE and self.current_task is None, \
+            f"{self.device_id} 非空闲不可发起回充"
+        self._timer = 0.0
+        if self.state == DeviceState.STANDBY:
+            self._set_state(DeviceState.RUNNING, "低电量回充出发")
+        self._set_phase(PH_TO_CHARGE, "驶向充电位")
 
     # ------------------------------------------------------------------
     # 每 tick 推进（六阶段状态机主体）
@@ -183,8 +200,30 @@ class AGV(DeviceBase):
                           DeviceState.MAINTENANCE):
             return
 
-        # ---- 空闲：在待命位涓流充电（装饰性逻辑）----
-        if self.phase == PH_IDLE or self.current_task is None:
+        # ---- 回充排程相位（增强）：去充电 / 充电中 ----
+        if self.phase == PH_TO_CHARGE:
+            if self._move_toward(S.AGV_CHARGE_DOCK, dt):
+                self._set_phase(PH_CHARGING, "接驳充电位")
+                self.bus.publish(self.device_id, EventTypes.AGV_CHARGE_START,
+                                 {"battery": round(self.battery, 1)})
+            self._sync_io()
+            return
+
+        if self.phase == PH_CHARGING:
+            self.battery = min(100.0, round(
+                self.battery + S.AGV_CHARGE_RATE * dt, 4))
+            self._sync_io()
+            if self.battery >= S.AGV_BATTERY_OK:
+                self.bus.publish(self.device_id, EventTypes.AGV_CHARGE_DONE,
+                                 {"battery": round(self.battery, 1)})
+                self._return_from_charge = True    # 归位段不计入运输任务数
+                self._set_phase(PH_RETURN, "充电达标回位")
+            return
+
+        # ---- 空闲：在待命位涓流充电（装饰性逻辑；严格限定空闲相位，
+        #      避免吞掉任务less 的 回位/回充 归位段——修复记录：曾用宽口径
+        #      current_task is None 导致充电达标后永远卡在回位相位）----
+        if self.phase == PH_IDLE:
             if self.battery < 100.0:
                 self.battery = min(100.0, round(self.battery + 0.5 * dt, 4))
             self._sync_io()
@@ -220,10 +259,13 @@ class AGV(DeviceBase):
                 self.set_io("di_loaded", 0)
                 self._complete_task(task)
                 self._set_phase(PH_RETURN, "交货完成")
-        # ---- 阶段5：回位（空驶）----
+        # ---- 阶段5：回位（空驶；回充达标归位同样走本段但不计运输任务数）----
         elif self.phase == PH_RETURN:
             if self._move_toward(self.home, dt):
-                self.tasks_done += 1
+                if getattr(self, "_return_from_charge", False):
+                    self._return_from_charge = False
+                else:
+                    self.tasks_done += 1
                 self.cycle_count += 1
                 self.current_task = None        # 交卷清空手头任务（否则永不接新单）
                 if self.state == DeviceState.RUNNING:
@@ -290,6 +332,7 @@ class AGVFleet:
         self._task_seq = 0
         self._done_counter = {"入库": 0, "出库": 0}
         self.shipped_count = 0                            # 已运抵出货口出厂的托数
+        self.charge_occupant: Optional[str] = None        # 充电位占用车辆号（单工位互斥）
 
     # ------------------------------------------------------------------
     # 任务建档
@@ -342,7 +385,7 @@ class AGVFleet:
                          dict(task.to_dict()))
 
     # ------------------------------------------------------------------
-    # 每 tick 推进：扫出库 → 派单 → 逐车步进
+    # 每 tick 推进：扫出库 → 派单 → 回充排程 → 逐车步进
     # ------------------------------------------------------------------
     def update(self, dt: float) -> None:
         # 1) 轮询立体库出库暂存区，新出现的待运托自动建出库任务
@@ -364,6 +407,36 @@ class AGVFleet:
         # 3) 逐车步进（故障车内部自行冻结）
         for agv in self.agvs.values():
             agv.update(dt)
+        # 4) 低电量回充排程（增强）：放在派单之后——真实运输任务优先占用车辆，
+        #    剩余空闲车才被调度去充电；单工位充电位由 charge_occupant 互斥登记。
+        self._dispatch_charging()
+
+    # ------------------------------------------------------------------
+    # 低电量回充排程（增强）
+    # ------------------------------------------------------------------
+    def _dispatch_charging(self) -> None:
+        """空闲且电量低于 AGV_BATTERY_LOW 的车 → 指派回充电位补能。
+
+        排程规则（假设记录见 settings §7.5）：
+          - 共享充电位单工位互斥：charge_occupant 登记在站/在途车辆，
+            离站（相位离开 去充电/充电中）即自动让位；
+          - 任务执行中的车不中断（单趟损耗 <1%），只在回到空闲后参与排队；
+          - 未抢到位的低电车继续待命涓流，下一 tick 重新竞争。
+        """
+        occ = self.agvs.get(self.charge_occupant) if self.charge_occupant else None
+        if occ is not None and occ.phase not in (PH_TO_CHARGE, PH_CHARGING):
+            self.charge_occupant = None                  # 在站车辆已离站，让位
+        if self.charge_occupant is not None:
+            return                                       # 充电位被占，本轮不派
+        for agv in self.agvs.values():
+            if (agv.phase == PH_IDLE and agv.current_task is None
+                    and agv.battery < S.AGV_BATTERY_LOW):
+                self.charge_occupant = agv.device_id
+                agv.bus.publish(agv.device_id, EventTypes.AGV_LOW_BATTERY,
+                                {"battery": round(agv.battery, 1),
+                                 "threshold": S.AGV_BATTERY_LOW})
+                agv.begin_charge_trip()
+                break                                    # 单工位：一次只派一台
 
     # ------------------------------------------------------------------
     # 查询接口
@@ -446,6 +519,25 @@ if __name__ == "__main__":
         f"AGV-01 未接续新单（回位后未清 current_task?）: {fleet.agvs['AGV-01'].tasks_done}"
     assert fleet.agvs["AGV-01"].current_task is None, "空闲车不应残留任务引用"
 
+    # --- 场景4：低电量自动回充排程（增强回归点）---
+    # 强制 AGV-01 低电量 → 车队应派其回充电位；充满后让位并归位，
+    # 且归位段不计入运输任务数（tasks_done 不变）。
+    a1 = fleet.agvs["AGV-01"]
+    a1.battery = S.AGV_BATTERY_LOW - 5                 # 强制低于阈值
+    low_ev, cs_ev, cd_ev = [], [], []
+    bus.subscribe(EventTypes.AGV_LOW_BATTERY, lambda e: low_ev.append(e))
+    bus.subscribe(EventTypes.AGV_CHARGE_START, lambda e: cs_ev.append(e))
+    bus.subscribe(EventTypes.AGV_CHARGE_DONE, lambda e: cd_ev.append(e))
+    mark_tasks = a1.tasks_done
+    clock.advance_ticks(int(40.0 / clock.dt), step_fn=step)
+    assert low_ev and cs_ev and cd_ev, \
+        f"回充事件链缺失: low={len(low_ev)} start={len(cs_ev)} done={len(cd_ev)}"
+    assert fleet.charge_occupant is None, "充满离站后充电位应释放"
+    assert a1.phase == PH_IDLE and a1.battery >= S.AGV_BATTERY_OK - 0.01, \
+        f"回充未闭环: phase={a1.phase} battery={a1.battery}"
+    assert a1.tasks_done == mark_tasks, "回充归位不应计入运输任务数"
+
     print(f"[agv_fleet 自检通过] 车队={snap['agv_count']}台, "
           f"完成={fleet.snapshot()['done']}, 出厂={fleet.shipped_count}托, "
-          f"AGV-01里程={fleet.agvs['AGV-01'].distance_m:.1f}m (仿真验证值)")
+          f"AGV-01里程={fleet.agvs['AGV-01'].distance_m:.1f}m, "
+          f"回充排程OK(低{S.AGV_BATTERY_LOW}%→充至{S.AGV_BATTERY_OK}%) (仿真验证值)")
