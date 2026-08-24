@@ -97,8 +97,12 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
     pymodbus 默认数据块允许任意写但不通知业务层——外部写 DO/AO 实际到不了设备）。
     现在外部写寄存器（FC6/FC16）时逐地址回调 ModbusServer.handle_write：
         - 命中 DO/AO 可写区 → 真实写回设备 set_io（远程控制生效）；
-        - 只读区（状态/故障/DI/AI）→ handle_write 忽略，寄存器由 sync_once 纠偏；
-    镜像线程自身的全量刷新（sync_once）经 _mirroring 标志旁路回调，防止写回环。
+        - 只读区（状态/故障/DI/AI）→ handle_write 忽略，寄存器由 sync_once 纠偏。
+    竞态修复记录：原实现用跨线程裸标志 _mirroring 在镜像期间整体旁路回调——
+    外部写恰落镜像窗口即被丢弃且回写被覆盖（DO/AO 远程写静默丢失）。
+    现改为双通道：setValues() 恒为外部写语义、任何时刻都回调；
+    镜像线程改走专用 setValuesMirror() 直写存储（镜像值本就是设备真值，
+    走回调也仅是无害幂等回显，专用通道只是更干净并省去逐寄存器扫描开销）。
     寻址口径（pymodbus 3.6 实测）：zero_mode=True 时 slave 直通地址，
     数据块收到的 address 与 build_register_map 的 reg 字段同一坐标系（块基址 0）。
     """
@@ -108,15 +112,19 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
         self._server = server
 
     def setValues(self, address, values):
-        if not self._server._mirroring:
-            if not isinstance(values, (list, tuple)):      # FC6 单寄存器写为标量
-                values = [values]
-            base = int(address)
-            for i, v in enumerate(values):
-                try:
-                    self._server.handle_write(base + i, int(v))
-                except Exception as exc:   # 回调异常不允许打断 pymodbus 请求线程
-                    print(f"[Modbus] 写回调异常 @ reg {base + i}: {exc}")
+        """外部写入口（pymodbus 请求线程调用）：先逐地址业务回调，再落存。"""
+        if not isinstance(values, (list, tuple)):      # FC6 单寄存器写为标量
+            values = [values]
+        base = int(address)
+        for i, v in enumerate(values):
+            try:
+                self._server.handle_write(base + i, int(v))
+            except Exception as exc:   # 回调异常不允许打断 pymodbus 请求线程
+                print(f"[Modbus] 写回调异常 @ reg {base + i}: {exc}")
+        super().setValues(address, values)
+
+    def setValuesMirror(self, address, values):
+        """镜像专用入口（sync_once 调用）：直接落存，不触发业务回调。"""
         super().setValues(address, values)
 
 
@@ -126,13 +134,11 @@ class ModbusServer:
     def __init__(self, plant):
         self.plant = plant
         self.map = build_register_map(plant.devices)
-        # 镜像标志：sync_once 全量刷写时置 True，旁路 CallbackDataBlock 的写回调
-        self._mirroring = False
         # ---- 数据存储：单从站模式 + zero_mode（客户端地址即块内偏移，最直观）----
-        # 修复记录：hr 块换为写入拦截版 CallbackDataBlock，外部写 DO/AO 真正写回设备
-        self.store = ModbusSlaveContext(
-            zero_mode=True,
-            hr=CallbackDataBlock(0, [0] * S.MODBUS_REG_COUNT, self))
+        # 修复记录：hr 块换为写入拦截版 CallbackDataBlock（外部写 DO/AO 真正写回设备）；
+        # 保留块引用供 sync_once 走 setValuesMirror 直写通道（不经 pymodbus 上下文）。
+        self._hr_block = CallbackDataBlock(0, [0] * S.MODBUS_REG_COUNT, self)
+        self.store = ModbusSlaveContext(zero_mode=True, hr=self._hr_block)
         self.context = ModbusServerContext(slaves=self.store, single=True)
         self.identity = ModbusDeviceIdentification(info_name={
             "VendorName": "Virtual-Smart-Factory",
@@ -179,25 +185,27 @@ class ModbusServer:
     # IO → 寄存器 镜像
     # ------------------------------------------------------------------
     def sync_once(self) -> None:
-        """把全部设备的当前值刷进保持寄存器（每次全量覆盖，幂等）。"""
-        store = self.store
-        self._mirroring = True            # 镜像刷写旁路写回调（防止镜像→回调→写设备回环）
-        try:
-            for block in self.map:
-                dev = self.plant.devices.get(block["device"])
-                if dev is None:
-                    continue
-                values = [_STATE_CODE.get(dev.state, 0),
-                          1 if dev.current_fault else 0]
-                values += [int(bool(dev.get_io(p["name"]))) for p in block["di"]]
-                values += [int(bool(dev.get_io(p["name"]))) for p in block["do"]]
-                values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
-                           for p in block["ai"]]
-                values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
-                           for p in block["ao"]]
-                store.setValues(3, block["base"], values)   # fc=3 保持寄存器
-        finally:
-            self._mirroring = False
+        """把全部设备的当前值刷进保持寄存器（每次全量覆盖，幂等）。
+
+        竞态修复记录：镜像改走 setValuesMirror 专用直写通道，不再用跨线程
+        裸标志旁路外部写——外部写任何时刻到达都会先回调业务层再落存，
+        最坏只延迟一个刷新周期（≤MODBUS_REFRESH_S）在寄存器上收敛为设备真值，
+        不存在被静默丢弃的窗口。
+        """
+        for block in self.map:
+            dev = self.plant.devices.get(block["device"])
+            if dev is None:
+                continue
+            values = [_STATE_CODE.get(dev.state, 0),
+                      1 if dev.current_fault else 0]
+            values += [int(bool(dev.get_io(p["name"]))) for p in block["di"]]
+            values += [int(bool(dev.get_io(p["name"]))) for p in block["do"]]
+            values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
+                       for p in block["ai"]]
+            values += [int(round(float(dev.get_io(p["name"])) * _AI_SCALE))
+                       for p in block["ao"]]
+            # fc=3 保持寄存器；镜像直写通道（不触发 handle_write 回调）
+            self._hr_block.setValuesMirror(block["base"], values)
 
     def _sync_loop(self) -> None:
         import time as wt
@@ -283,6 +291,15 @@ if __name__ == "__main__":
     ret = mb.handle_write(stack_entry["reg"], 1)
     assert "do_stack_g=1" in ret, f"写回处理异常: {ret}"
 
+    # --- 双通道语义回归（竞态修复点）：镜像直写不得触发业务回调；外部写任何时刻都生效 ---
+    blk = mb._hr_block
+    blk.setValuesMirror(stack_entry["reg"], [0])   # 模拟镜像写 0：设备值应保持 1 不变
+    assert plant.assembly.get_io("do_stack_g") == 1, "镜像直写误触发了业务回调"
+    blk.setValues(stack_entry["reg"], [0])         # 模拟外部写 0：应立即写回设备
+    assert plant.assembly.get_io("do_stack_g") == 0, "外部写通道在镜像并存下失效"
+    blk.setValues(stack_entry["reg"], [1])         # 恢复现场
+    assert plant.assembly.get_io("do_stack_g") == 1
+
     # --- 只读区纠偏演示：向立体库状态寄存器伪造"故障码3"，下一刷新周期应被真值覆盖 ---
     wh_block = next(b for b in mb.map if b["device"] == S.WAREHOUSE_ID)
     wr = cli.write_register(wh_block["state_reg"], 3, slave=S.MODBUS_UNIT_ID)
@@ -295,5 +312,6 @@ if __name__ == "__main__":
     cli.close()
 
     print(f"[modbus_server 自检通过] 映射{len(mb.map)}块, "
-          f"读状态={state_code}, DO写回链路OK, 只读区纠偏OK (仿真验证值)")
+          f"读状态={state_code}, DO写回链路OK, 只读区纠偏OK, "
+          f"镜像/外部双通道语义OK (仿真验证值)")
     mb.stop()
