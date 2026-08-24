@@ -67,6 +67,12 @@ pip install -r requirements.txt      # numpy/flask/pymodbus
 # 全厂自检（A模块级(含有限料仓) + B Web/AGV/回充排程冒烟 + C 算法/MES/EMS/订单生命周期 共17用例 + 600s 加速联跑，报告到 reports/）
 python selftest.py
 
+# 开发质量工具链（可选）：静态检查 + 标准框架测试薄壳（详见 docs/DEVELOPMENT.md）
+pip install -r requirements-dev.txt  # pytest / pytest-cov / ruff（仅开发期，不进运行时依赖）
+ruff check .                         # 静态检查（E4/E7/E9+F 基线）
+pytest -m "not smoke"                # 快速测试层（跳过联跑冒烟，约数秒）
+pytest                               # 全量 17 用例 + 覆盖率可加 --cov=core --cov=lines ...
+
 # 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
 python mes/jsonl_replay.py
 
@@ -99,6 +105,10 @@ python main.py --speed 60 --duration 900
 Virtual-Smart-Factory/
 ├─ main.py                    编排入口（Plant 编排器 + AGV接入 + execute_command + --web）
 ├─ selftest.py                全厂自检（A1~A9 含有限料仓 + B2~B4 + C1~C4 + B1 600s联跑 = 17 用例）
+├─ pyproject.toml             工具链配置（pytest / ruff）【增强新增】
+├─ requirements-dev.txt       开发期依赖（pytest/pytest-cov/ruff，不进运行时依赖）【增强新增】
+├─ tests/
+│  └─ test_plant_selftest.py  pytest 薄壳（参数化转接 selftest 17 用例，smoke 标记）【增强新增】
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/

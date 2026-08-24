@@ -401,5 +401,5 @@ if __name__ == "__main__":
     assert hub.client_count() == 0, "Close 后在线数应为0"
     cli.close()
     hub.stop()
-    print(f"[ws_hub 自检通过] 握手/中文帧/长帧/PingPong/Close 全部通过 "
-          f"(端口5091, 仿真验证值)")
+    print("[ws_hub 自检通过] 握手/中文帧/长帧/PingPong/Close 全部通过 "
+          "(端口5091, 仿真验证值)")

@@ -106,7 +106,6 @@ class VisionAlgorithmV3:
         o = self.online
         n = max(o["n"], 1)
         ng = o["TP"] + o["FN"]
-        ok = o["TN"] + o["FP"]
         return {
             "n": o["n"],
             "clf_acc": round((o["TP"] + o["TN"]) / n, 4),

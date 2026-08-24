@@ -307,7 +307,8 @@ if __name__ == "__main__":
         and len(theirs) == 1 and theirs[0]["target_qty"] == 5, "run_id 隔离失败"
 
     # --- 4) 收尾与文件落盘 ---
-    led.close(); led2.close()
+    led.close()
+    led2.close()
     assert os.path.exists(db)
     shutil.rmtree(tmpdir, ignore_errors=True)
     print("[sqlite_ledger 自检通过] orders UPSERT×9/qc_log×5 行, 过滤与倒序正确, "

@@ -38,7 +38,7 @@ from core.sim_clock import SimClock
 from core.event_bus import EventBus, EventTypes
 from core.device_base import DeviceBase, DeviceState
 from core.fault_injector import FaultInjector
-from lines.unit_assembly import UnitAssembly, STEP_ORDER
+from lines.unit_assembly import UnitAssembly
 from lines.unit_vision import UnitVision
 from lines.unit_palletizing import UnitPalletizing
 from lines.warehouse import Warehouse
@@ -151,7 +151,8 @@ def case_device() -> str:
     assert abs(dev.run_seconds - frozen) < 1e-9
     dev.reset()
     assert dev.state == DeviceState.STANDBY
-    dev.enter_maintenance(); dev.exit_maintenance()
+    dev.enter_maintenance()
+    dev.exit_maintenance()
     assert dev.state == DeviceState.STANDBY
     assert {"待机", "运行", "故障", "维护"} <= states, f"状态覆盖不全: {states}"
     return f"五态迁移正常, 停机原因{dict(dev.stop_counter)}"
@@ -466,7 +467,6 @@ def case_agv_loop() -> str:
     bal = plant.pallet_balance()
     assert lhs == sum(bal.values()), f"守恒失败: {lhs} vs {bal}"
 
-    fs = plant.agv_fleet.snapshot()
     return (f"2托满托→AGV入库闭环×{len(done_in)}; 六阶段{sorted(phases)[0]}…齐全; "
             f"出库出厂{plant.agv_fleet.shipped_count}托; 守恒{bal}")
 

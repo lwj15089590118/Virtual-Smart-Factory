@@ -26,8 +26,8 @@ agv/agv_fleet.py —— AGV 车队仿真（班次2：替换班次1的占位搬�
 """
 
 import math
-from collections import deque, OrderedDict
-from dataclasses import dataclass, field
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Deque, Dict, List, Optional
 
 import os

@@ -1,0 +1,7 @@
+# Virtual-Smart-Factory 开发/质量工具链（不进运行时依赖）
+# 原则：运行时只用 标准库+numpy+flask+pymodbus 不变；
+#       pytest/ruff 属于开发期工具，随本文件按需安装。
+-r requirements.txt
+pytest>=8.0
+pytest-cov>=5.0
+ruff>=0.4

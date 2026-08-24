@@ -24,7 +24,7 @@ import sys
 # 路径引导：直接运行本文件(python mes/jsonl_replay.py)时把项目根加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from typing import Iterator, List
+from typing import Iterator
 
 from config import settings as S
 from mes.mes_engine import MESEngine

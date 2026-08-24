@@ -24,10 +24,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Syntax check (compileall)
         run: python -m compileall -q core lines agv scada vision mes ems
 
-      - name: Full plant self-test (17 cases)
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Unit & integration tests (pytest thin shell over selftest)
+        run: python -m pytest -q
+
+      - name: Full plant self-test (17 cases + report)
         run: python selftest.py

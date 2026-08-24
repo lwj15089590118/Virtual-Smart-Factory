@@ -41,7 +41,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from core.sim_clock import SimClock
 from core.event_bus import EventBus, EventTypes
-from core.device_base import DeviceBase, DeviceState
+from core.device_base import DeviceBase
 from core.fault_injector import FaultInjector
 from lines.unit_assembly import UnitAssembly
 from lines.unit_vision import UnitVision

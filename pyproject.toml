@@ -1,0 +1,22 @@
+# Virtual-Smart-Factory 工程工具链配置（pytest / ruff）
+# =====================================================
+# 说明：本仓库是脚本型项目（无打包发布需求），此文件只承载工具配置。
+
+[tool.pytest.ini_options]
+# 用例目录；pythonpath 把项目根加入导入路径（pytest>=7），保证 tests 里能 import selftest
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "smoke: 系统级冒烟（600 仿真秒加速联跑，墙钟约数十秒）；日常用 -m 'not smoke' 跳过",
+]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 140                 # 宽松行宽：存量代码中文注释较长，不做全量重排
+target-version = "py312"
+extend-exclude = ["web", "docs", "logs", "reports", ".dsh-vision-toolkit"]
+
+[tool.ruff.lint]
+# 与 ruff 默认一致的基线：E4/E7/E9（语法与明显错误）+ F（未用导入/未定义名/未用变量）。
+# 不开全量风格规则——存量代码风格统一靠评审约定，不靠机器重排。
+select = ["E4", "E7", "E9", "F"]

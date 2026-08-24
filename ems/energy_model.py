@@ -25,7 +25,7 @@ import sys
 # 路径引导：直接运行本文件(python ems/energy_model.py)时把项目根加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 from core.event_bus import EventTypes
 from config import settings as S

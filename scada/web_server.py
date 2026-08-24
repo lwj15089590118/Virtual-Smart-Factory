@@ -33,7 +33,7 @@ import os
 import sys
 import threading
 from collections import OrderedDict
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 # 路径引导：直接运行本文件时把项目根加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

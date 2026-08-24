@@ -40,10 +40,10 @@ class Warehouse(DeviceBase):
         self._locations: Dict[str, dict] = {}
         for r in range(1, S.WH_ROWS + 1):
             for c in range(1, S.WH_BAYS + 1):
-                for l in range(1, S.WH_LEVELS + 1):
-                    loc_id = f"A-{r:02d}-{c:02d}-{l:02d}"
+                for lv in range(1, S.WH_LEVELS + 1):
+                    loc_id = f"A-{r:02d}-{c:02d}-{lv:02d}"
                     self._locations[loc_id] = {
-                        "loc_id": loc_id, "row": r, "bay": c, "level": l,
+                        "loc_id": loc_id, "row": r, "bay": c, "level": lv,
                         "occupied": False, "pallet_id": None, "since": None}
         # 空闲库位栈：按 编号 升序分配（贴近真实 WMS 的就近策略）
         self._free_locs: Deque[str] = deque(sorted(self._locations.keys()))
