@@ -1,5 +1,9 @@
 # Virtual-Smart-Factory 虚拟智能工厂一体化仿真平台
 
+[![CI](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml/badge.svg)](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+
 > 旗舰作品集项目 · 全软件仿真、零硬件依赖 · 所有运行指标均为 **仿真验证值**
 > 分三个班次开发：**班次1 仿真内核与产线层（已完成）** → **班次2 SCADA监控层+AGV物流+Web可视化（已完成）** → **班次3 视觉算法/MES/EMS（已完成）**
 
@@ -165,3 +169,7 @@ Virtual-Smart-Factory/
 | 3✔ | 真实视觉算法 | `vision/vision_upgrade.py`（实例级注入覆写 `judge()`；`--rule-vision` 退回规则法对照） |
 | 3✔ | MES 报工 | `mes/mes_engine.py`（订阅 "*" 自动报工/追溯）；离线分析 `python mes/jsonl_replay.py` |
 | 3✔ | EMS/健康模块 | `ems/energy_model.py`（能耗积分）+ `ems/health_monitor.py`（健康评分/告警/维护接口已启用） |
+
+## 八、许可证
+
+本项目基于 [MIT License](LICENSE) 开源，可自由用于学习、教学与二次开发。
