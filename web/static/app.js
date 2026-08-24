@@ -171,6 +171,8 @@ function bindButtons() {
   // 班次3修改：MES 追溯查询按钮（回车同效）
   $('btnTrace').onclick     = runTrace;
   $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
+  // 增强：qc_log 流水小表过滤切换（立即重拉一次）
+  $('qcFilter').onchange    = () => pollMes();
   // 垛型面板视图切换：等距(默认·零依赖) → 真3D → 俯视 → 循环
   $('btnPalletView').onclick = () => {
     const order = bar3DAvailable() ? ['iso', '3d', 'top'] : ['iso', 'top'];
@@ -920,10 +922,17 @@ function drawAgvFromCache() {
 
 /* =====================================================================
    班次3修改：MES 工单面板（/api/mes/orders + /api/mes/trace）
+   增强：追加 qc_log 判定流水小表（/api/mes/qc_log，SQLite 台账）
 ==================================================================== */
 let energyCache = { devices: [] };      // 能耗面板缓存（图表 tooltip 用）
 
+const QC_ROW_LIMIT = 8;                 // 流水小表行数上限（面板空间有限，最新在前）
+
 async function pollMes() {
+  await Promise.all([pollMesOrders(), pollQcLog()]);
+}
+
+async function pollMesOrders() {
   let d;
   try { d = await api('/api/mes/orders'); } catch (e) { return; }
   if (!d.ok) return;
@@ -948,6 +957,44 @@ async function pollMes() {
       <td>${o.yield_pct}%</td>
       <td class="${o.status === '已完成' ? 'wo-done' : ''}">${o.status}</td>
     </tr>`).join('');
+}
+
+/* ---------------- 增强：qc_log 判定流水小表渲染 ----------------
+   数据源 /api/mes/qc_log?limit=8[&result=OK|NG]；enabled=False（台账关闭）
+   时显示占位文案而非报错。P(NG) 列在规则法路径（无模型概率）下回退显示规则结论。 */
+function renderQcLog(d) {
+  const tb = $('qcLogBody');
+  if (!d.enabled) {
+    tb.innerHTML = '<tr><td colspan="7" class="qc-empty">SQLite 台账未启用（MES_SQLITE_ENABLE=False）</td></tr>';
+    $('qcCount').textContent = '未启用';
+    return;
+  }
+  if (!d.rows.length) {
+    tb.innerHTML = '<tr><td colspan="7" class="qc-empty">暂无判定记录…</td></tr>';
+    $('qcCount').textContent = '最新 0 条 · 最新在前';
+    return;
+  }
+  $('qcCount').textContent = `最新 ${d.rows.length} 条 · 最新在前`;
+  tb.innerHTML = d.rows.map((r) => `
+    <tr>
+      <td>${(r.ts_sim ?? 0).toFixed(1)}</td>
+      <td>${r.product_id || '—'}</td>
+      <td><span class="qc-badge ${r.result === 'NG' ? 'qc-ng' : 'qc-ok'}">${r.result || '—'}</span></td>
+      <td>${r.dim_mm != null ? Number(r.dim_mm).toFixed(3) : '—'}</td>
+      <td>${r.wo_id || '—'}</td>
+      <td>${r.clf_p_ng != null ? Number(r.clf_p_ng).toFixed(2) : (r.rule_result || '—')}</td>
+      <td class="${r.hidden_defect && r.hidden_defect !== '无' ? 'qc-defect' : ''}">${r.hidden_defect || '—'}</td>
+    </tr>`).join('');
+}
+
+async function pollQcLog() {
+  const f = $('qcFilter').value;
+  let d;
+  try {
+    d = await api(`/api/mes/qc_log?limit=${QC_ROW_LIMIT}${f ? '&result=' + f : ''}`);
+  } catch (e) { return; }
+  if (!d.ok) return;
+  renderQcLog(d);
 }
 
 /* ---------------- 追溯查询 ---------------- */

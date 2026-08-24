@@ -16,7 +16,7 @@ web/static/index.html —— Virtual-Smart-Factory SCADA 监控大屏（班次2�
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Virtual-Smart-Factory · SCADA 监控大屏</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/style.css?v=6">
+<link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <!-- ======================= 顶部：标题 + 时钟 + 控制 ======================= -->
@@ -200,6 +200,20 @@ web/static/index.html —— Virtual-Smart-Factory SCADA 监控大屏（班次2�
         <thead><tr><th>工单</th><th>型号</th><th>进度</th><th>OK/NG</th><th>良率</th><th>状态</th></tr></thead>
         <tbody id="mesOrderBody"></tbody>
       </table>
+      <!-- 增强：质检判定流水小表（/api/mes/qc_log，SQLite 台账） -->
+      <div class="qc-head">
+        <span class="qc-title">质检判定流水 · SQLite台账(qc_log)</span>
+        <select id="qcFilter" class="mini-sel">
+          <option value="" selected>全部判定</option>
+          <option value="OK">仅 OK</option>
+          <option value="NG">仅 NG</option>
+        </select>
+        <span class="sub" id="qcCount">最新 -- 条 · 最新在前</span>
+      </div>
+      <table class="devtable qctable">
+        <thead><tr><th>t(s)</th><th>产品号</th><th>判定</th><th>尺寸mm</th><th>工单</th><th>P(NG)</th><th>真值缺陷</th></tr></thead>
+        <tbody id="qcLogBody"><tr><td colspan="7" class="qc-empty">等待台账数据…</td></tr></tbody>
+      </table>
       <pre id="traceResult" class="trace-result">追溯结果将显示在这里（支持 产品号 Pxxxxxxxx / 托盘号 PLTxxxxxx）</pre>
     </div>
   </section>
@@ -225,6 +239,6 @@ web/static/index.html —— Virtual-Smart-Factory SCADA 监控大屏（班次2�
   MES 工单追溯 / EMS 能耗健康 · 所有指标均为<b>仿真验证值</b> · 零硬件全软件仿真
 </footer>
 
-<script src="/static/app.js?v=12"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>

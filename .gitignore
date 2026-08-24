@@ -10,3 +10,6 @@ reports/
 .venv/
 .idea/
 .vscode/
+
+# 本地工具产物（DSH 视觉工具箱工作目录）
+.dsh-vision-toolkit/

@@ -236,6 +236,24 @@ td.t-error   { color: var(--red); }
   color: #9fd0f5; max-height: 110px; overflow-y: auto;
   font-family: Consolas, monospace;
 }
+
+/* ---- 增强：面板⑨ 质检判定流水小表（/api/mes/qc_log，SQLite 台账）---- */
+.qc-head { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; }
+.qc-title { font-size: 11px; color: var(--ink-dim); letter-spacing: .5px; }
+.qc-head .sub { margin-left: auto; font-size: 10px; }
+.qctable td { font-size: 11px; padding: 3px 8px; }
+.qc-empty { color: var(--ink-dim); text-align: center; font-family: inherit; }
+.qc-badge {
+  display: inline-block; min-width: 30px; text-align: center;
+  padding: 0 7px; border-radius: 999px;
+  font-size: 10px; font-weight: bold; font-family: Consolas, monospace;
+}
+.qc-badge.qc-ok { color: var(--green); border: 1px solid var(--green);
+                  background: rgba(0,230,118,.08); }
+.qc-badge.qc-ng { color: var(--red); border: 1px solid var(--red);
+                  background: rgba(255,82,82,.12); }
+/* 真值缺陷列：隐性缺陷（划痕/崩缺/错位）高亮为警示橙；"无"保持默认灰 */
+td.qc-defect { color: #ff9f43; }
 .chart-sm { height: 170px; }
 .health-wrap { height: 118px; }
 .hscore-good { color: var(--green); font-weight: bold; }
