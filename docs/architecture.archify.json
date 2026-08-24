@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Virtual-Smart-Factory 架构总览",
+    "output": "vsf-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [1280, 700],
+    "views": [
+      { "id": "main-path", "label": "主数据链路", "focus": ["screen", "scada", "plant", "line", "agv", "wh"], "note": "从监控大屏入口沿编排驱动与物料流走到立体库。" },
+      { "id": "event-hub", "label": "事件中枢与消费方", "focus": ["bus", "log", "mes", "ems"], "note": "全部子系统的客观事实都从事件总线单向流出。" },
+      { "id": "algo-inject", "label": "算法注入点", "focus": ["vision", "line"], "note": "班次3视觉算法以实例级覆写进入质检单元。" }
+    ]
+  },
+  "components": [
+    { "id": "client", "type": "external", "label": "组态软件 / 第三方 SCADA", "sublabel": "Modbus Poll · Ignition", "pos": [40, 66], "size": [150, 64] },
+    { "id": "scada", "type": "backend", "label": "SCADA 服务群", "sublabel": "REST :5080 · WS :5081 · Modbus :1502", "pos": [300, 60], "size": [210, 76], "tag": "flask + 手写RFC6455 + pymodbus" },
+    { "id": "screen", "type": "frontend", "label": "监控大屏", "sublabel": "web/static · ECharts 十面板", "pos": [1010, 56], "size": [200, 84], "tag": "本地vendor优先加载" },
+    { "id": "plant", "type": "backend", "label": "全厂编排器 Plant", "sublabel": "main.py · execute_command", "pos": [140, 240], "size": [200, 68], "tag": "SimClock dt=0.1s" },
+    { "id": "bus", "type": "messagebus", "label": "事件总线 EventBus", "sublabel": "core/event_bus.py · 通配订阅", "pos": [480, 236], "size": [210, 72] },
+    { "id": "log", "type": "database", "label": "JSONL 事件日志", "sublabel": "logs/events_*.jsonl", "pos": [850, 236], "size": [190, 64], "tag": "可离线回放" },
+    { "id": "line", "type": "backend", "label": "产线单元群", "sublabel": "装配32s → 视觉质检 → 码垛48箱", "pos": [120, 420], "size": [210, 72] },
+    { "id": "agv", "type": "backend", "label": "AGV 车队", "sublabel": "六阶段状态机 · 2台", "pos": [400, 420], "size": [170, 64] },
+    { "id": "wh", "type": "database", "label": "立体库 WH-01", "sublabel": "200库位 · 堆垛机25s", "pos": [640, 420], "size": [170, 64] },
+    { "id": "mes", "type": "backend", "label": "MES 制造执行", "sublabel": "自动报工 · OEE · 四级追溯", "pos": [850, 420], "size": [190, 64] },
+    { "id": "vision", "type": "backend", "label": "视觉算法包", "sublabel": "vision/ · LR-v3 分类器", "pos": [120, 592], "size": [180, 64], "tag": "A/B 对照" },
+    { "id": "ems", "type": "backend", "label": "EMS 能源与健康", "sublabel": "分时电费 · 健康评分告警", "pos": [620, 544], "size": [190, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "单进程全软件仿真 · 标准库+numpy+flask+pymodbus", "wraps": ["scada", "plant", "bus", "log", "line", "agv", "wh", "vision", "mes", "ems"] }
+  ],
+  "connections": [
+    { "id": "screen-rest", "from": "screen", "to": "scada", "label": "REST 轮询 /api/*", "fromSide": "left", "toSide": "right", "labelDy": 22 },
+    { "id": "scada-ws-push", "from": "scada", "to": "screen", "label": "WS 实时事件推送", "variant": "dashed", "labelDy": -22 },
+    { "id": "client-modbus", "from": "client", "to": "scada", "label": "Modbus 读写 :1502", "fromSide": "right", "toSide": "left" },
+    { "id": "scada-cmd", "from": "scada", "to": "plant", "label": "/api/command → execute_command", "fromSide": "bottom", "toSide": "top" },
+    { "id": "plant-drive", "from": "plant", "to": "line", "label": "update(dt) 逐tick驱动", "fromSide": "bottom", "toSide": "top", "variant": "emphasis", "labelAt": [310, 396] },
+    { "id": "plant-bus", "from": "plant", "to": "bus", "label": "急停/命令审计" },
+    { "id": "line-call-agv", "from": "line", "to": "agv", "label": "满托 agv.call" },
+    { "id": "agv-deliver", "from": "agv", "to": "wh", "label": "入库交付 / 出库取货", "labelDy": 56 },
+    { "id": "line-events", "from": "line", "to": "bus", "label": "工艺/质检/码垛事件", "fromSide": "top", "toSide": "bottom", "labelDy": -30 },
+    { "id": "agv-events", "from": "agv", "to": "bus", "label": "任务事件", "fromSide": "top", "toSide": "bottom", "labelDy": 44 },
+    { "id": "wh-events", "from": "wh", "to": "bus", "label": "出入库事件", "fromSide": "top", "toSide": "bottom" },
+    { "id": "bus-jsonl", "from": "bus", "to": "log", "label": "JSONL 追加落盘" },
+    { "id": "bus-mes", "from": "bus", "to": "mes", "label": "订阅 * 自动报工" },
+    { "id": "bus-ems", "from": "bus", "to": "ems", "label": "订阅 state/fault", "fromSide": "top", "toSide": "top", "via": [[585, 210], [1160, 210], [1160, 500], [715, 500]] },
+    { "id": "vision-inject", "from": "vision", "to": "line", "label": "judge() 实例级注入", "variant": "dashed", "fromSide": "top", "toSide": "bottom" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "仿真内核", "items": ["SimClock 全厂唯一时间源，加速倍率任意正数", "EventBus 精确+通配订阅，JSONL 全量落盘", "FaultInjector 泊松随机+脚本化故障注入"] },
+    { "dot": "emerald", "title": "数据闭环", "items": ["满托→AGV→立体库，托盘守恒六分解校验", "MES 四级追溯：产品→托盘→批次→工单", "EMS 功率曲线分时计费 + 健康评分滞回告警"] },
+    { "dot": "rose", "title": "观测出口", "items": ["大屏 REST 轮询 + WebSocket 实时推送", "Modbus 保持寄存器映射可导出给组态软件", "JSONL 事件流可离线回放重建 MES 台账"] }
+  ]
+}

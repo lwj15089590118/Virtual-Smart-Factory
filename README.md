@@ -3,6 +3,18 @@
 > 旗舰作品集项目 · 全软件仿真、零硬件依赖 · 所有运行指标均为 **仿真验证值**
 > 分三个班次开发：**班次1 仿真内核与产线层（已完成）** → **班次2 SCADA监控层+AGV物流+Web可视化（已完成）** → **班次3 视觉算法/MES/EMS（已完成）**
 
+## ⭐ 项目全貌
+
+![架构总览](docs/images/architecture.png)
+
+*交互式架构图（缩放/搜索/焦点模式）：[docs/architecture.html](docs/architecture.html) · 规格源：[docs/architecture.archify.json](docs/architecture.archify.json)*
+
+## 🖥️ 监控大屏实况（系统运行中）
+
+![监控大屏](docs/images/dashboard.png)
+
+*体验方式：`python main.py --web --speed 10` 启动后浏览器打开 <http://127.0.0.1:5080>（WebSocket :5081 实时推送 · Modbus :1502 可连组态软件）*
+
 ## 一、班次1 已实现能力
 
 | 子系统 | 文件 | 能力 |
