@@ -3,7 +3,7 @@
 selftest.py —— 全厂自检（逐模块自检 + 10 分钟加速联跑冒烟测试）
 ================================================================
 自检内容：
-    A. 模块级检查：时钟/总线/设备基类/注入器/装配/视觉/码垛/立体库
+    A. 模块级检查：时钟/总线/设备基类/注入器/装配/视觉/码垛/立体库/有限料仓
        （每项调用公开接口做行为断言，与各模块内置 __main__ 自检互补）；
     B. 系统级冒烟：用与 main.py 完全相同的 Plant 编排，fast 模式加速联跑
        600 仿真秒（=10 分钟），校验端到端物流守恒、事件落盘完整性；
@@ -311,6 +311,54 @@ def case_warehouse_structs() -> str:
     table = wh.locations()
     assert len(table) == wh.capacity
     return (f"200库位表, 入8出1, 库位{freed_loc}释放后复用成功, 在库{wh.stock_count}")
+
+
+def case_finite_feeder() -> str:
+    """A9 有限料仓：料空冻结于等待上料 → REST 补料续产 → 低水位滞回告警恰一次。"""
+    plant = Plant(speed=S.DEFAULT_SPEED, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    asm = plant.assembly
+    asm.feeder_stock = 2                       # 制造"即将料空"场景（阈值20之上仅剩2件）
+    low_ev, empty_ev, refill_ev = [], [], []
+    plant.bus.subscribe(EventTypes.FEEDER_LOW, lambda e: low_ev.append(e))
+    plant.bus.subscribe(EventTypes.FEEDER_EMPTY, lambda e: empty_ev.append(e))
+    plant.bus.subscribe(EventTypes.FEEDER_REFILL, lambda e: refill_ev.append(e))
+    plant.build()                              # build 在订阅事件之后亦可（事件走总线）
+    plant.start_up_all()
+
+    def advance_until(cond, max_s: float) -> bool:
+        deadline = plant.clock.now() + max_s
+        while plant.clock.now() < deadline:
+            if cond():
+                return True
+            plant.clock.run_until(plant.clock.now() + 1.0)
+        return cond()
+
+    # ---- 阶段1：耗尽最后两件正常产出，随后料空冻结于"等待上料" ----
+    out_mark = asm.products_out_total
+    ok = advance_until(lambda: (asm.products_out_total >= out_mark + 2
+                                and len(empty_ev) >= 1), 240)
+    assert ok, f"未如期耗尽并触发 feeder.empty: out={asm.products_out_total}"
+    assert asm.current_step_name() == "等待上料" and asm.feeder_stock == 0, \
+        f"料空状态异常: step={asm.current_step_name()} stock={asm.feeder_stock}"
+    frozen_out = asm.products_out_total
+    assert len(low_ev) == 1, f"低水位告警应恰好一次(滞回): {len(low_ev)}"
+    plant.clock.run_until(plant.clock.now() + 60.0)   # 冻结期产量必须纹丝不动
+    assert asm.products_out_total == frozen_out, "料空期间产量未被冻结"
+
+    # ---- 阶段2：REST 命令补料 → 断点续走；低水位不重复告警 ----
+    rv = plant.execute_command("feeder_refill", {})
+    assert rv["ok"] and rv["stock"] == S.FEEDER_REFILL_QTY, f"补料异常: {rv}"
+    n_refill = len(refill_ev)
+    ok = advance_until(lambda: asm.products_out_total >= frozen_out + 3, 240)
+    assert ok, "补料后未恢复产出"
+    assert len(refill_ev) == n_refill and len(low_ev) == 1, \
+        "补料后不应再触发低水位/额外补料事件"
+    snap = asm.snapshot()
+    assert snap["feeder_state"] in ("正常", "低"), f"料仓状态异常: {snap['feeder_state']}"
+    return (f"料空冻结于等待上料(冻结期产出0) → REST补料+{rv['added']}恢复产出"
+            f"+3件; 事件账目 low×{len(low_ev)}/empty×{len(empty_ev)}/refill×{len(refill_ev)} "
+            f"(仿真验证值)")
 
 
 # ======================================================================
@@ -832,6 +880,8 @@ def main() -> int:
     run_case("A6", "视觉质检规则", case_vision_rule)
     run_case("A7", "码垛垛型3×4×4", case_palletizing_pattern)
     run_case("A8", "立体库数据结构", case_warehouse_structs)
+    print("\n[A9] 有限料仓：料空冻结于等待上料 → REST 补料续产 → 低水位滞回…")
+    run_case("A9", "有限料仓(料空冻结+补料续产)", case_finite_feeder)
 
     smoke_detail = "（按要求跳过）"
     if not args.skip_smoke:

@@ -54,6 +54,9 @@ const EVT_LABEL = {
   // 增强：AGV 回充排程事件中文名
   'agv.low_battery': '低电量告警', 'agv.charge_start': '开始充电',
   'agv.charge_done': '充电完成',
+  // 增强：有限料仓事件中文名
+  'feeder.low': '料仓低水位', 'feeder.empty': '料仓已清空',
+  'feeder.refill': '料仓补料',
 };
 
 const charts = {};                    // echarts 实例集合
@@ -219,6 +222,14 @@ function setNode(elId, state) {
 function renderFlow(units, fleet, injector) {
   const a = units.assembly, v = units.vision,
         p = units.palletizer, w = units.warehouse;
+  // 有限料仓（增强）：原料节点实时库存与状态着色（正常绿/低黄/空红）
+  const feederEl = $('feederTxt');
+  if (feederEl && a.feeder_stock !== undefined) {
+    feederEl.textContent = `${a.feeder_stock}/${a.feeder_capacity} 件 · ${a.feeder_state}`;
+    feederEl.style.color =
+      a.feeder_state === '空' ? '#ff5252'
+      : (a.feeder_state === '低' ? '#ffd54f' : '#00e676');
+  }
   // 装配
   setNode('nodeAsm', a.state);
   $('asmStep').textContent = `步骤: ${a.step} ${a.step_progress}%`;
@@ -709,6 +720,10 @@ function summarize(ev) {
     case 'mes.order_closed':  return `${d.wo_id} 完工关单（OK${d.ok}/NG${d.ng}）`;
     case 'ems.health_alert':  return `${d.dev_id} 健康分 ${d.score}：${d.advice}`;
     case 'ems.maintenance':   return `${d.dev_id} 维护动作（${d.reason}）`;
+    // 增强：有限料仓事件摘要
+    case 'feeder.low':        return `料余 ${d.stock} 件（阈值 ${d.threshold}）`;
+    case 'feeder.empty':      return `料仓清空，装配冻结于等待上料`;
+    case 'feeder.refill':     return `补料 ${d.added} 件 → 余 ${d.stock}${d.auto ? '（自动）' : ''}`;
     default:
       return Object.keys(d).length ? JSON.stringify(d) : '';
   }

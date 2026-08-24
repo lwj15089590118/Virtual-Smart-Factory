@@ -14,7 +14,8 @@ lines/unit_assembly.py —— 装配单元（以 PLC 顺控/梯图思想实现�
 假设记录：
     - 急停复位后产品保留在工位、当前步骤从头计时（比"丢弃在制品"更稳妥，
       且与真实产线"急停后重新启动当前工步"的惯例一致）；
-    - 原料无限供应（班次2 接立体库出库后再改为有限料仓）。
+    - 原料经内嵌有限料仓供应（增强：落地班次1预留的扩展点——料空冻结于
+      "等待上料"步，补料后断点续走；低水位滞回告警，支持手动/自动补料）。
 """
 
 from collections import deque
@@ -55,6 +56,11 @@ class UnitAssembly(DeviceBase):
         self.products_out_total = 0         # 累计流出数
         self._product_seq = 0               # 产品序号发生器
         self.takt_seconds = sum(self.step_durations.values())  # 实际生效节拍
+        # ---- 有限料仓（增强）：装配单元内嵌上料机构 ----
+        self.feeder_capacity = int(S.FEEDER_CAPACITY)
+        self.feeder_stock = min(int(S.FEEDER_INITIAL), self.feeder_capacity)
+        self._feeder_low_latched = False     # 低水位告警滞回（补到阈值上方才复位）
+        self._starving = False               # 料空冻结节拍中（补料后自动续走）
 
     # ------------------------------------------------------------------
     # IO 点表（DI/DO/AI/AO —— 班次2 将按此表映射 Modbus 寄存器）
@@ -70,6 +76,9 @@ class UnitAssembly(DeviceBase):
         self.add_io("ai_press_force", "AI", 0.0, "kN", "压装力实时值")
         self.add_io("ai_torque", "AI", 0.0, "N·m", "拧紧扭矩实时值")
         self.add_io("do_stack_g", "DO", 0, desc="三色灯-绿(自动运行)")
+        self.add_io("ai_feeder_level", "AI",
+                    float(min(S.FEEDER_INITIAL, S.FEEDER_CAPACITY)),
+                    "件", "料仓余量(件)")
 
     # ------------------------------------------------------------------
     # 对外操作接口（班次2 Web 按钮 / 自检脚本调用）
@@ -82,6 +91,32 @@ class UnitAssembly(DeviceBase):
     def start_auto(self) -> None:
         """切入自动循环（停止→待机→运行 由顺控自然推进）。"""
         self.start_up()
+
+    # ------------------------------------------------------------------
+    # 有限料仓（增强）：消耗 / 低水位滞回告警 / 补料
+    # ------------------------------------------------------------------
+    def feeder_refill(self, qty: Optional[int] = None,
+                      auto: bool = False) -> dict:
+        """补料入口（Web 命令 feeder_refill 与自动策略共用）。
+
+        默认按 FEEDER_REFILL_QTY 补料，封顶容量；补到低水位阈值上方
+        自动解除滞回告警；若产线正因料空冻结则立即恢复"等待上料"步。
+        """
+        add = int(qty) if qty is not None else int(S.FEEDER_REFILL_QTY)
+        if add <= 0:
+            return {"ok": False, "msg": "补料数量必须为正数"}
+        before = self.feeder_stock
+        self.feeder_stock = min(self.feeder_capacity, before + add)
+        added = self.feeder_stock - before
+        self.set_io("ai_feeder_level", float(self.feeder_stock))
+        if self.feeder_stock > S.FEEDER_LOW:
+            self._feeder_low_latched = False          # 滞回复位
+        if self.feeder_stock > 0:
+            self._starving = False                    # 料到：等待上料步自动续走
+        self.bus.publish(self.device_id, EventTypes.FEEDER_REFILL,
+                         {"added": added, "stock": self.feeder_stock,
+                          "auto": auto})
+        return {"ok": True, "added": added, "stock": self.feeder_stock}
 
     # ------------------------------------------------------------------
     # 每 tick 推进（唯一的时间使用入口是 dt 与 clock.now()）
@@ -107,12 +142,23 @@ class UnitAssembly(DeviceBase):
                              {"step": self.current_step_name(),
                               "remain_s": round(self._step_remain(), 2)})
 
-        # 待机 → 自动起跑（原料无限供应，条件恒满足）
+        # 待机 → 自动起跑（条件恒满足；料空由下方等待上料冻结段接管）
         if self.state == DeviceState.STANDBY:
             self._set_state(DeviceState.RUNNING, "自动循环开始")
 
         step_name = STEP_ORDER[self._step_index]
         dur = self.step_durations.get(step_name, 1.0)
+
+        # ---- 有限料仓（增强）：料空 → 冻结在"等待上料"步直至补料 ----
+        if step_name == "等待上料" and self.feeder_stock <= 0:
+            if not self._starving:
+                self._starving = True
+                self._feeder_low_latched = True   # 料空必然已越过低水位
+                self.bus.publish(self.device_id, EventTypes.FEEDER_EMPTY,
+                                 {"stock": 0}, severity="WARNING")
+            self.set_io("do_stack_g", 0)          # 三色灯灭（等料）
+            return                                # 冻结：不计时、不推进、不产出
+
         self._drive_outputs(step_name, dur)     # 按步驱动输出点（供 UI/Modbus 观察）
         # 计时累加做 9 位舍入：与 SimClock 同款防漂移处理（长跑批节拍确定性）
         self._step_timer = round(self._step_timer + dt, 9)
@@ -127,6 +173,16 @@ class UnitAssembly(DeviceBase):
     def _on_step_done(self, step_name: str) -> None:
         """步完成动作：按步序执行副作用并推进步指针。"""
         if step_name == "上料":
+            # 有限料仓（增强）：消耗一件毛坯；低水位滞回告警（可选自动补料）
+            self.feeder_stock = max(0, self.feeder_stock - 1)
+            self.set_io("ai_feeder_level", float(self.feeder_stock))
+            if self.feeder_stock <= S.FEEDER_LOW and not self._feeder_low_latched:
+                self._feeder_low_latched = True
+                self.bus.publish(self.device_id, EventTypes.FEEDER_LOW,
+                                 {"stock": self.feeder_stock,
+                                  "threshold": S.FEEDER_LOW})
+                if S.FEEDER_AUTO_REFILL:
+                    self.feeder_refill(auto=True)  # 自动策略：即触即补
             # 产品在此刻"出生"，分配全局唯一 ID
             self._product_seq += 1
             self._wip = Product(product_id=f"P{self._product_seq:08d}",
@@ -198,6 +254,12 @@ class UnitAssembly(DeviceBase):
             "products_out": self.products_out_total,
             "takt_s": round(self.takt_seconds, 2),
             "door_hold": self._hold,
+            # 有限料仓（增强）
+            "feeder_stock": self.feeder_stock,
+            "feeder_capacity": self.feeder_capacity,
+            "feeder_state": ("空" if self.feeder_stock <= 0
+                             else ("低" if self.feeder_stock <= S.FEEDER_LOW
+                                   else "正常")),
         })
         return snap
 

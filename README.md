@@ -23,7 +23,7 @@
 | 事件总线 | `core/event_bus.py` | 发布/订阅（精确+通配）；JSONL 追加持久化；环形缓冲查询 `recent()/replay()` |
 | 设备基类 | `core/device_base.py` | 五态状态机（停止/待机/运行/故障/维护）；DI/DO/AI/AO 点表；运行秒数/循环数/停机原因统计；故障注入接口 |
 | 故障注入器 | `core/fault_injector.py` | 随机故障（泊松率可配）+ 脚本故障（设备/时刻/类型）+ 急停人工复位；全部产生事件 |
-| 装配单元 | `lines/unit_assembly.py` | PLC 顺控 8 步状态机；节拍可配（默认 32s）；安全门开→保持、急停→全线停 |
+| 装配单元 | `lines/unit_assembly.py` | PLC 顺控 8 步状态机；节拍可配（默认 32s）；安全门开→保持、急停→全线停；有限料仓（料空冻结于等待上料·低水位滞回告警·REST 命令补料续产） |
 | 视觉质检 | `lines/unit_vision.py` | 尺寸规则判定 OK/NG（理论 NG 率≈4.6%）；NG 分流返修道；质检记录输出（班次3 换真算法） |
 | 码垛单元 | `lines/unit_palletizing.py` | 3×4×4=48 箱/托垛型；毫米坐标随事件输出；垛满→托盘输出→AGV 呼叫事件 |
 | 立体库 | `lines/warehouse.py` | 200 库位表（4排×10列×5层）；出入库队列；堆垛机任务模型；库位回收复用 |
@@ -59,7 +59,7 @@
 # 环境：Windows 10 + Python 3.12
 pip install -r requirements.txt      # numpy/flask/pymodbus
 
-# 全厂自检（A模块级 + B Web/AGV/回充排程冒烟 + C 算法/MES/EMS/订单生命周期 共16用例 + 600s 加速联跑，报告到 reports/）
+# 全厂自检（A模块级(含有限料仓) + B Web/AGV/回充排程冒烟 + C 算法/MES/EMS/订单生命周期 共17用例 + 600s 加速联跑，报告到 reports/）
 python selftest.py
 
 # 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
@@ -93,7 +93,7 @@ python main.py --speed 60 --duration 900
 ```
 Virtual-Smart-Factory/
 ├─ main.py                    编排入口（Plant 编排器 + AGV接入 + execute_command + --web）
-├─ selftest.py                全厂自检（A1~A8 + B2 Web冒烟 + B3 AGV闭环 + B4 回充排程 + C1~C4 + B1 600s联跑 = 16 用例）
+├─ selftest.py                全厂自检（A1~A9 含有限料仓 + B2~B4 + C1~C4 + B1 600s联跑 = 17 用例）
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/
@@ -153,7 +153,7 @@ Virtual-Smart-Factory/
 - EMS 能耗：功率曲线分段积分精确（60s×12kW=0.200kWh，误差<0.01）；电费按尖峰平谷分时计价（谷0.35/平0.65/峰1.05 元/kWh），状态段跨档自动切分，分档电费合计=总电费；CO₂ 按 0.5568 kg/kWh 折算
 - EMS 健康：无故障期评分 ≥98 → 全线急停40s 后 89.5 → 连续故障 46.5（跌破告警线60自动发 `ems.health_alert` 并给出维护建议）；`ems_maintain` 维护命令进出闭环
 - 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径）
-- 自检 **16/16 通过**（A1~A8 模块级 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
+- 自检 **17/17 通过**（A1~A9 模块级含有限料仓 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
 
 ## 七、后续班次挂接点速查
 

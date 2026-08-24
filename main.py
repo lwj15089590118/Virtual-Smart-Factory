@@ -356,6 +356,13 @@ class Plant:
                     return {"ok": False, "msg": "EMS 健康模块未启用"}
                 dev_id = str(params.get("dev_id", ""))
                 return self.ems_health.exit_maintenance(dev_id)
+            if cmd == "feeder_refill":              # 有限料仓补料（手动/演示）
+                qty = params.get("qty")
+                ret = self.assembly.feeder_refill(
+                    int(qty) if qty not in (None, "") else None)
+                ret["msg"] = (f"料仓补料 +{ret['added']} 件 → "
+                              f"余 {ret['stock']}/{self.assembly.feeder_capacity}")
+                return ret
             return {"ok": False, "msg": f"未知命令: {cmd}"}
         except Exception as exc:                    # 命令层兜底：异常不炸 Web 线程
             return {"ok": False, "msg": f"命令执行异常: {exc.__class__.__name__}: {exc}"}

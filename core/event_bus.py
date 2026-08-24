@@ -58,6 +58,11 @@ class EventTypes:
     AGV_CHARGE_START = "agv.charge_start"    # 到达充电位开始充电
     AGV_CHARGE_DONE = "agv.charge_done"      # 充电达标离开充电位
 
+    # ---- 增强：装配单元有限料仓事件（原料供给侧全程可观测）----
+    FEEDER_LOW = "feeder.low"                # 低水位告警（滞回：补到阈上才复位）
+    FEEDER_EMPTY = "feeder.empty"            # 料仓清空，装配冻结于等待上料
+    FEEDER_REFILL = "feeder.refill"          # 补料完成（含 added/stock/auto 标记）
+
 
 class EventBus:
     """进程内发布/订阅总线 + JSONL 落盘。"""
