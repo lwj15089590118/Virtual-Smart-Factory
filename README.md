@@ -150,12 +150,17 @@ Virtual-Smart-Factory/
 │                             面板⑩ 能耗·健康度；垛型三视图等距自绘/真3D/俯视可切换）
 │  └─ vendor/                 内置 echarts@5.2.2 / echarts-gl@2.0.9（同源首选加载，
 │                             规避浏览器跟踪防护拦截与断网场景）【验收期新增】
+├─ plc_refill_bridge.py        OpenPLC→产线 补料请求桥接器（线圈上升沿→REST补料，
+│                             配合 docs/TUTORIAL_MCGS_OPENPLC.md 实现梯形图闭环）【增强新增】
 ├─ docs/
 │  ├─ HANDOVER_SHIFT2.md      班次2交接Prompt模板（存档）
 │  ├─ HANDOVER_SHIFT3.md      班次3交接Prompt模板（存档）
 │  ├─ CHECKLIST_SHIFT1.md     班次1自检清单
 │  ├─ CHECKLIST_SHIFT2.md     班次2自检清单【班次2产出】
-│  └─ CHECKLIST_SHIFT3.md     班次3自检清单【班次3产出】
+│  ├─ CHECKLIST_SHIFT3.md     班次3自检清单【班次3产出】
+│  ├─ INTERVIEW.md            面试弹药库（概念映射三菱/西门子/MCGS + 王牌排障案例）【增强新增】
+│  ├─ DEVELOPMENT.md          开发指南（命令速查/三层测试体系/覆盖率快照）【增强新增】
+│  └─ TUTORIAL_MCGS_OPENPLC.md 组态联动实战教程：MCGS触屏+OpenPLC梯形图接入虚拟产线【增强新增】
 ├─ logs/                      运行期生成：events_*.jsonl 事件流
 └─ reports/                   运行期生成：selftest_report_*.txt 自检报告
 ```
