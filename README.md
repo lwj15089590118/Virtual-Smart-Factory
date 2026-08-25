@@ -1,6 +1,6 @@
 # Virtual-Smart-Factory 虚拟智能工厂一体化仿真平台
 
-[![CI](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml/badge.svg)](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml)
+[![CI](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lwj15089590118/Virtual-Smart-Factory/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
