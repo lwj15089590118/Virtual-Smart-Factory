@@ -5,4 +5,6 @@
 # 班次2 预留：flask（SCADA Web 服务）、pymodbus（Modbus TCP 从站）
 numpy>=2.0
 flask>=3.0
-pymodbus>=3.6
+# 锁定 <3.7：3.7+ 重构数据存储层（ModbusSlaveContext 移除/更名、旧接口 v4 将移除），
+# 本仓库 Modbus 从站按 3.6.x 实测口径开发（见 scada/modbus_server.py 文件头说明）
+pymodbus>=3.6,<3.7

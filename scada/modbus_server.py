@@ -36,9 +36,20 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pymodbus.server import StartTcpServer, ServerStop
-from pymodbus.datastore import (ModbusServerContext, ModbusSequentialDataBlock,
-                                ModbusSlaveContext)
 from pymodbus.device import ModbusDeviceIdentification
+
+try:
+    from pymodbus.datastore import (ModbusServerContext,
+                                    ModbusSequentialDataBlock,
+                                    ModbusSlaveContext)
+except ImportError as exc:  # 修复记录（CI 实战）：pymodbus 3.7+ 移除 ModbusSlaveContext，
+    # 3.15 起旧数据存储整体弃用（服务层只走 SimDevice 拷贝，镜像/写回双通道失效）。
+    # 本模块按 3.6.x 实测口径开发，requirements.txt 已锁定 pymodbus>=3.6,<3.7；
+    # 这里把晦涩的 ImportError 翻译成可执行的行动指令。
+    raise ImportError(
+        "检测到不兼容的 pymodbus 版本（缺少 ModbusSlaveContext，应为 3.7+ 新版）。"
+        "本仓库按 pymodbus 3.6.x 口径开发，请执行: pip install 'pymodbus>=3.6,<3.7'"
+    ) from exc
 
 from core.device_base import DeviceState
 from config import settings as S
