@@ -41,10 +41,15 @@ class UnitAssembly(DeviceBase):
 
     def __init__(self, clock, bus: EventBus,
                  unit_id: str = S.ASSEMBLY_ID,
-                 step_durations: Optional[dict] = None):
+                 step_durations: Optional[dict] = None,
+                 auto_refill: Optional[bool] = None):
         name = S.ASSEMBLY_NAME if unit_id == S.ASSEMBLY_ID else f"装配单元{unit_id}"
         super().__init__(unit_id, name, clock, bus)
         self.step_durations = dict(step_durations or S.ASSEMBLY_STEP_DURATIONS)
+        # 料仓自动补料开关（审查修复 报告13-P2-4）：None=跟随 S.FEEDER_AUTO_REFILL；
+        # soak_run 等长跑场景经构造参数开启，不再运行期改写 config 全局单例
+        self.auto_refill = bool(S.FEEDER_AUTO_REFILL
+                                if auto_refill is None else auto_refill)
         # ---- 顺控内部状态 ----
         self._step_index = 0                # 当前步序号（0..7）
         self._step_timer = 0.0              # 当前步已耗时（仿真秒）
@@ -181,7 +186,7 @@ class UnitAssembly(DeviceBase):
                 self.bus.publish(self.device_id, EventTypes.FEEDER_LOW,
                                  {"stock": self.feeder_stock,
                                   "threshold": S.FEEDER_LOW})
-                if S.FEEDER_AUTO_REFILL:
+                if self.auto_refill:
                     self.feeder_refill(auto=True)  # 自动策略：即触即补
             # 产品在此刻"出生"，分配全局唯一 ID
             self._product_seq += 1

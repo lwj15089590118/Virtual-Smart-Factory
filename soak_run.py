@@ -139,10 +139,12 @@ def main() -> int:
     print("=" * 78)
 
     # ---- 组装产线（与 main.py 同一路径；soak 专用：自动补料，等价三班倒补料作业）----
+    # 审查修复（报告13-P2-4）：改用构造参数开启，不再运行期改写 S.FEEDER_AUTO_REFILL
+    # 全局单例（与项目"配置中心运行期不可变"纪律对齐）
     _init_psapi()
-    S.FEEDER_AUTO_REFILL = True
     plant = Plant(speed=S.DEFAULT_SPEED, mode="fast",
-                  seed=S.DEFAULT_SEED, enable_random_faults=True)
+                  seed=S.DEFAULT_SEED, enable_random_faults=True,
+                  feeder_auto_refill=True)
     fault_tally = {"raised": 0, "cleared": 0}
     plant.bus.subscribe(EventTypes.FAULT_RAISED,
                         lambda e: fault_tally.__setitem__("raised", fault_tally["raised"] + 1))
@@ -222,6 +224,8 @@ def main() -> int:
 
     t0 = time.perf_counter()
     first = sample(t0)
+    row = first      # 审查修复（报告13-P2-4）：兜底引用——若首个采样块内即中断，
+                     # finally 终报仍可安全取 row 字段（此前会 NameError 崩溃）
     aborted = False
     try:
         end_sim = first["sim_s"] + sim_seconds

@@ -10,7 +10,8 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
        GET  /api/pallet3d               当前垛型毫米坐标（ECharts bar3D 数据源）
        GET  /api/warehouse/locations    全库位表（热力图数据源，200 格）
        GET  /api/modbus/map             Modbus 保持寄存器映射表（点表文档化）
-       POST /api/command {"cmd":...}    大屏按钮命令 → Plant 公开方法（带审计事件）
+       POST /api/command {"cmd":...}    大屏按钮命令 → Plant 公开方法（带审计事件；
+                                        审查修复：命令口令校验，见 SCADA_API_TOKEN）
        ---- 班次3修改：MES/EMS 扩展路由 ----
        GET  /api/mes/orders             工单台账 + 报工报表（产量/良率/OEE 仿真验证值）
        GET  /api/mes/batches            批次台账（?wo_id= 过滤）
@@ -63,6 +64,7 @@ class TrendRecorder:
     }
 
     def __init__(self, bus: EventBus):
+        self._bus = bus
         self._buckets: "OrderedDict[float, dict]" = OrderedDict()
         self._lock = threading.Lock()
         self._tokens = [bus.subscribe(etype, self._on_event, "KPI趋势")
@@ -88,8 +90,11 @@ class TrendRecorder:
             return list(self._buckets.values())
 
     def close(self) -> None:
+        """退订总线（审查修复 报告13-P2-6：此前空实现从未退订——单次运行无碍，
+        进程内重建 Web 服务会重复累计趋势计数）。幂等，可重复调用。"""
         for tk in self._tokens:
-            pass                    # token 已由总线持有；停服随进程结束即可
+            self._bus.unsubscribe(tk)
+        self._tokens.clear()
 
 
 # ======================================================================
@@ -98,12 +103,19 @@ class TrendRecorder:
 class ScadaWebServer:
     """把一个 Plant 实例暴露为 SCADA Web 端（REST + WS 推送）。"""
 
-    def __init__(self, plant):
+    def __init__(self, plant, host: Optional[str] = None):
+        """
+        :param host: 三协议(HTTP/WS)监听地址；None=跟随 settings.SCADA_HTTP_HOST。
+            审查修复（报告13-P1-1）：默认 127.0.0.1 仅本机；局域网演示由 CLI
+            --host 0.0.0.0 显式开放（main.py 传参，不在运行期改写 config）。
+        """
         self.plant = plant
+        self.host = host or S.SCADA_HTTP_HOST
         self.bus: EventBus = plant.bus
-        # ---- WebSocket 推送网关（独立端口）----
-        ws_host = "127.0.0.1" if S.SCADA_HTTP_HOST == "127.0.0.1" else "0.0.0.0"
-        self.hub = WsHub(ws_host, S.SCADA_WS_PORT)
+        # ---- WebSocket 推送网关（独立端口；与 HTTP 同地址绑定）----
+        self.hub = WsHub(self.host, S.SCADA_WS_PORT)
+        # ---- 审查修复：命令口令（环境变量 SCADA_API_TOKEN 优先，其次 settings）----
+        self.command_token = os.environ.get("SCADA_API_TOKEN") or S.SCADA_API_TOKEN
         # ---- 事件通配符订阅 → WS 广播（交付要求：订阅事件总线通配符）----
         self._ws_token = self.bus.subscribe("*", self._on_any_event,
                                             "WS推送网关")
@@ -124,6 +136,11 @@ class ScadaWebServer:
         if self._running:
             return
         self._running = True
+        if not self.command_token:
+            # 审查修复（报告13-P1-1）：未配置口令时明确告知暴露面收窄策略
+            print("[SCADA-Web] 安全提示: 未配置命令口令(SCADA_API_TOKEN)，"
+                  "POST /api/command 仅允许本机(127.0.0.1)请求，远程主机一律拒绝；"
+                  "如需远程下发命令请设置环境变量 SCADA_API_TOKEN 并携带 X-Auth-Token 头")
         self.hub.start()
         self._flask_thread = threading.Thread(
             target=self._serve_http, name="ScadaWebThread", daemon=True)
@@ -133,21 +150,22 @@ class ScadaWebServer:
         """停机：退订总线、关 WS 网关（Flask daemon 线程随主进程退出）。"""
         self._running = False
         self.bus.unsubscribe(self._ws_token)
+        self.trend.close()                  # 审查修复：KPI 趋势记录器一并退订
         self.hub.stop()
 
     def _serve_http(self) -> None:
         try:
             # 假设记录：Flask 内置服务器(threaded=True)满足演示并发；生产应换 waitress/gunicorn
-            self.app.run(host=S.SCADA_HTTP_HOST, port=S.SCADA_HTTP_PORT,
+            self.app.run(host=self.host, port=S.SCADA_HTTP_PORT,
                          debug=False, use_reloader=False, threaded=True)
         except OSError as exc:
             print(f"[SCADA-Web] HTTP 服务启动失败(端口{S.SCADA_HTTP_PORT}被占用?): {exc}")
 
     def info(self) -> str:
         """启动横幅信息。"""
-        return (f"SCADA Web: http://127.0.0.1:{S.SCADA_HTTP_PORT}  |  "
-                f"WebSocket: ws://127.0.0.1:{S.SCADA_WS_PORT}{self.hub.path}  |  "
-                f"Modbus TCP: 127.0.0.1:{S.MODBUS_TCP_PORT}")
+        return (f"SCADA Web: http://{self.host}:{S.SCADA_HTTP_PORT}  |  "
+                f"WebSocket: ws://{self.host}:{S.SCADA_WS_PORT}{self.hub.path}  |  "
+                f"Modbus TCP: {self.host}:{S.MODBUS_TCP_PORT}")
 
     # ------------------------------------------------------------------
     # WS 广播回调
@@ -239,10 +257,15 @@ class ScadaWebServer:
         # ---------- 事件查询 ----------
         @app.route("/api/events")
         def api_events():
+            # 审查修复（报告13-P2-2）：n<=0 钳制回默认值 50——此前负数穿透到
+            # EventBus.recent 的 items[-n:] 负负得正，几乎泄出全量环形缓冲
             try:
-                n = min(int(request.args.get("n", 50)), 500)
+                n = int(request.args.get("n", 50))
             except ValueError:
                 n = 50
+            if n <= 0:
+                n = 50
+            n = min(n, 500)
             etype = request.args.get("type") or None
             return jsonify({"ok": True,
                             "events": self.bus.recent(n, etype)})
@@ -284,6 +307,18 @@ class ScadaWebServer:
         # ---------- 命令入口（大屏按钮 → Plant 公开方法）----------
         @app.route("/api/command", methods=["POST"])
         def api_command():
+            # ---- 审查修复（报告13-P1-1）：命令鉴权 ----
+            # 口令已配置（环境变量 SCADA_API_TOKEN 或 settings）：所有请求（含本机）
+            # 必须携带 X-Auth-Token 头，口径统一无旁路；
+            # 口令未配置：仅信任本机(127.0.0.1/::1)请求，远程一律 403（启动横幅有提示）。
+            if self.command_token:
+                if request.headers.get("X-Auth-Token", "") != self.command_token:
+                    return jsonify({"ok": False,
+                                    "msg": "命令被拒绝：X-Auth-Token 缺失或不匹配"}), 401
+            elif request.remote_addr not in ("127.0.0.1", "::1"):
+                return jsonify({"ok": False,
+                                "msg": "命令被拒绝：服务端未配置 SCADA_API_TOKEN，"
+                                       "仅允许本机下发命令"}), 403
             body = request.get_json(silent=True) or {}
             cmd = str(body.get("cmd", ""))
             params = body.get("params") or {}

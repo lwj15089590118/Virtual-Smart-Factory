@@ -30,6 +30,7 @@ import json
 import queue
 import socket
 import threading
+from urllib.parse import urlparse
 
 # RFC 6455 固定魔串：Sec-WebSocket-Accept = base64(sha1(key + GUID))
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -166,7 +167,7 @@ class WsHub:
             self._drop(client)
 
     def _handshake(self, conn: socket.socket) -> bool:
-        """HTTP Upgrade 握手：校验路径/头，回 101 与 Accept 密钥。"""
+        """HTTP Upgrade 握手：校验路径精确匹配/Origin 白名单/头，回 101 与 Accept 密钥。"""
         buf = b""
         while b"\r\n\r\n" not in buf:
             chunk = conn.recv(1024)
@@ -178,8 +179,14 @@ class WsHub:
         head = buf.decode("latin-1", errors="replace")
         request_line = head.split("\r\n", 1)[0]
         parts = request_line.split(" ")
-        if len(parts) < 2 or not parts[1].startswith(self.path):
+        # 审查修复（报告13-P2-5）：升级路径精确匹配（剥掉查询串后全等）——
+        # 此前 startswith 前缀匹配使 /wsX、/api/x?x=/ws 等路径也能升级
+        target = parts[1].split("?", 1)[0] if len(parts) >= 2 else ""
+        if len(parts) < 2 or target != self.path:
             conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
+            return False
+        if not self._origin_allowed(head):
+            conn.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
             return False
         key = None
         for line in head.split("\r\n")[1:]:
@@ -196,6 +203,31 @@ class WsHub:
             hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
         conn.sendall(_HANDSHAKE_TMPL.format(accept=accept).encode("ascii"))
         return True
+
+    @staticmethod
+    def _origin_allowed(head: str) -> bool:
+        """Origin 白名单（审查修复 报告13-P2-5，防跨站 WebSocket 劫持）：
+        - 无 Origin 头（自检脚本/curl 等非浏览器客户端）放行；
+        - 有 Origin 时仅允许 localhost/127.0.0.1/[::1]，或与请求 Host 头同源
+          （--host 0.0.0.0 开放局域网时，同源大屏仍可正常连接）。"""
+        origin = host = None
+        for line in head.split("\r\n")[1:]:
+            if ":" in line:
+                k, v = line.split(":", 1)
+                kl = k.strip().lower()
+                if kl == "origin":
+                    origin = v.strip()
+                elif kl == "host":
+                    host = v.strip()
+        if not origin:
+            return True
+        try:
+            ohost = (urlparse(origin).hostname or "").lower()
+            hhost = (urlparse(f"//{host}").hostname or "").lower() if host else ""
+        except ValueError:
+            return False
+        return ohost in ("localhost", "127.0.0.1", "::1") or \
+            (ohost != "" and ohost == hhost)
 
     def _reader_loop(self, client: _Client) -> None:
         """解析客户端→服务器帧：只关心 Close/Ping（文本上行忽略）。"""
@@ -359,6 +391,19 @@ if __name__ == "__main__":
     bad.sendall(b"GET /other HTTP/1.1\r\nHost: x\r\n\r\n")
     assert b"404" in bad.recv(64)
     bad.close()
+
+    # --- 审查修复回归（P2-5）：前缀/查询串伪装路径一律 404；跨站 Origin 403 ---
+    for evil in (b"GET /wsX HTTP/1.1\r\nHost: x\r\n\r\n",
+                 b"GET /api/xx?x=/ws HTTP/1.1\r\nHost: x\r\n\r\n"):
+        e = socket.create_connection(("127.0.0.1", 5091), timeout=3)
+        e.sendall(evil)
+        assert b"404" in e.recv(64), f"伪装路径未被拒绝: {evil[:30]}"
+        e.close()
+    evil_org = socket.create_connection(("127.0.0.1", 5091), timeout=3)
+    evil_org.sendall(b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:5091\r\n"
+                     b"Origin: http://evil.example.com\r\n\r\n")
+    assert b"403" in evil_org.recv(64), "跨站 Origin 未被拒绝"
+    evil_org.close()
 
     # --- 大小两档文本帧广播 + 客户端解码校验 ---
     received = []

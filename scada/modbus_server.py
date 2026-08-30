@@ -12,9 +12,10 @@ scada/modbus_server.py —— Modbus TCP 从站（pymodbus，班次2 交付项2�
         base+0   状态码    0停止/1待机/2运行/3故障/4维护（只读）
         base+1   故障标志  0无故障/1有故障（只读）
         base+2.. DI 点序   0/1（只读）
-        接着     DO 点序   0/1（可写！写回设备 set_io —— 演示远程控制）
+        接着     DO 点序   0/1（可写！写回设备 set_io —— 远程控制演示；
+                            审查修复：默认只读，--allow-write 才开放）
         接着     AI 点序   工程值×100 取整（只读；如 50.00kN→5000）
-        接着     AO 点序   工程值×100 取整（可写回 set_io）
+        接着     AO 点序   工程值×100 取整（可写回 set_io，同样受只读开关约束）
     完整点表可通过 GET /api/modbus/map 获取（web_server 提供），亦可用
     build_register_map() 独立导出——组态软件组点时的"说明书"。
 
@@ -142,8 +143,20 @@ class CallbackDataBlock(ModbusSequentialDataBlock):
 class ModbusServer:
     """把 Plant 设备点表暴露为 Modbus TCP 保持寄存器。"""
 
-    def __init__(self, plant):
+    def __init__(self, plant, host: str | None = None, port: int | None = None,
+                 allow_write: bool | None = None):
+        """
+        :param host/port: 监听地址与端口；None=跟随 settings（MODBUS_TCP_HOST/PORT）。
+            审查修复（报告13-P1-1）：默认 127.0.0.1 仅本机，局域网演示由 CLI
+            --host 0.0.0.0 显式开放（main.py 传参，不在运行期改写 config）。
+        :param allow_write: DO/AO 写回开关；None=跟随 settings.MODBUS_ALLOW_WRITE
+            （默认 False 只读）。CLI --allow-write 显式开启远程控制演示。
+        """
         self.plant = plant
+        self.host = host or S.MODBUS_TCP_HOST
+        self.port = int(port or S.MODBUS_TCP_PORT)
+        self.allow_write = bool(S.MODBUS_ALLOW_WRITE
+                                if allow_write is None else allow_write)
         self.map = build_register_map(plant.devices)
         # ---- 数据存储：单从站模式 + zero_mode（客户端地址即块内偏移，最直观）----
         # 修复记录：hr 块换为写入拦截版 CallbackDataBlock（外部写 DO/AO 真正写回设备）；
@@ -187,10 +200,10 @@ class ModbusServer:
 
     def _serve(self) -> None:
         try:
-            StartTcpServer(context=self.context, address=("0.0.0.0", S.MODBUS_TCP_PORT),
+            StartTcpServer(context=self.context, address=(self.host, self.port),
                            identity=self.identity)
         except OSError as exc:
-            print(f"[Modbus] 服务启动失败(端口{S.MODBUS_TCP_PORT}被占用?): {exc}")
+            print(f"[Modbus] 服务启动失败(端口{self.port}被占用?): {exc}")
 
     # ------------------------------------------------------------------
     # IO → 寄存器 镜像
@@ -233,10 +246,13 @@ class ModbusServer:
     def handle_write(self, address: int, value: int) -> str:
         """
         外部对单个保持寄存器的写意图处理（由 CallbackDataBlock 在请求线程回调）：
+        - 只读模式下直接忽略（审查修复 报告13-P1-1：默认只读，--allow-write 才开放）；
         - 命中某设备 DO/AO 点 → 真实写回 set_io（远程控制生效）；
         - 其余（状态/故障/DI/AI 只读区）→ 忽略并返回说明，
           寄存器旧值由 sync_once 在下一刷新周期纠偏回真值。
         """
+        if not self.allow_write:
+            return "只读模式（--allow-write 可开放 DO/AO 写回），写入被忽略"
         for block in self.map:
             rel = address - block["base"]
             if rel < 0:
@@ -268,7 +284,7 @@ if __name__ == "__main__":
     plant = Plant(speed=60, mode="fast", seed=S.DEFAULT_SEED)
     plant.build()
     plant.start_up_all()
-    mb = ModbusServer(plant)
+    mb = ModbusServer(plant, allow_write=True)   # 自检验证写回链路，显式开放 DO/AO 写
     assert mb.map and len(mb.map) >= 5, "设备映射块数量异常"
     asm_block = next(b for b in mb.map if b["device"] == S.ASSEMBLY_ID)
     print(f"[映射表] 共{len(mb.map)}块 | 装配块基址={asm_block['base']} "
@@ -301,6 +317,12 @@ if __name__ == "__main__":
         "外部写 DO 未写回设备（CallbackDataBlock 回调链路断）"
     ret = mb.handle_write(stack_entry["reg"], 1)
     assert "do_stack_g=1" in ret, f"写回处理异常: {ret}"
+
+    # --- 只读开关回归（审查修复 P1-1）：默认拒绝 DO/AO 写回 ---
+    ro = ModbusServer(plant, allow_write=False)
+    ret = ro.handle_write(stack_entry["reg"], 0)
+    assert "只读" in ret, f"只读模式应拒绝写回: {ret}"
+    assert plant.assembly.get_io("do_stack_g") == 1, "只读模式意外改写了设备"
 
     # --- 双通道语义回归（竞态修复点）：镜像直写不得触发业务回调；外部写任何时刻都生效 ---
     blk = mb._hr_block

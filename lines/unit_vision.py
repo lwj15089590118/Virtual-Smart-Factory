@@ -177,7 +177,13 @@ class UnitVision(DeviceBase):
         })
         # 班次3修改：注入了升级算法时，导出算法档案（训练指标/在线混淆矩阵）
         if getattr(self, "algo_info", None):
-            snap["algo"] = self.algo_info
+            info = dict(self.algo_info)                 # 静态档案（训练指标，安装时定格）
+            algo = getattr(self, "vision_algo", None)
+            if algo is not None:
+                # 审查修复（报告13-P2-3）：在线混淆矩阵改为每次快照实时刷新——
+                # 此前 algo_info 在安装时定格，/api/status 的在线指标恒为 n=0
+                info["online"] = algo.online_metrics()
+            snap["algo"] = info
         return snap
 
 

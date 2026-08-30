@@ -60,14 +60,19 @@ class Plant:
                  enable_random_faults: bool = True,
                  enable_agv: bool = True,                # 班次2修改：允许关闭车队做回归对照
                  enable_vision_algo: Optional[bool] = None,  # 修复：None=跟随 S.VISION_ALGO_ENABLE；
-                 enable_ems: bool = True):               # 修复：EMS 装配开关（对齐 VISION/MES 风格）
+                 enable_ems: bool = True,                # 修复：EMS 装配开关（对齐 VISION/MES 风格）
+                 feeder_auto_refill: Optional[bool] = None):  # 审查修复：None=跟随 S 配置；
+                     # soak 等场景经构造参数开启，不再运行期改写 config 全局单例（报告13-P2-4）
         # ---- 内核 ----
         self.clock = SimClock(dt=S.SIM_DT, speed=speed)
-        self.bus = EventBus(self.clock, log_dir=S.LOG_DIR)
+        self.bus = EventBus(self.clock, log_dir=S.LOG_DIR,
+                            rotate_mb=S.EVENT_LOG_ROTATE_MB,   # 审查修复：按大小轮转+保留份数
+                            keep=S.EVENT_LOG_KEEP)
         self.mode = mode
         self.seed = seed
         # ---- 设备与单元 ----
-        self.assembly = UnitAssembly(self.clock, self.bus)
+        self.assembly = UnitAssembly(self.clock, self.bus,
+                                     auto_refill=feeder_auto_refill)
         self.vision = UnitVision(self.clock, self.bus,
                                  rng=np.random.default_rng(seed + 1))
         self.palletizer = UnitPalletizing(self.clock, self.bus)
@@ -368,13 +373,18 @@ class Plant:
             return {"ok": False, "msg": f"命令执行异常: {exc.__class__.__name__}: {exc}"}
 
     def run(self, duration: Optional[float] = None,
-            enable_web: bool = False) -> None:
+            enable_web: bool = False,
+            web_host: Optional[str] = None,
+            modbus_allow_write: bool = False) -> None:
         """
         启动仿真：
         - fast 模式：同步满速跑完 duration 仿真秒（自检冒烟同款路径）；
         - realtime 模式：后台线程按倍率推进，Ctrl+C 优雅退出；
         - 班次2修改：enable_web=True 时同时启动 SCADA Web(REST+WS) 与
-          Modbus TCP 从站两个 daemon 服务线程。
+          Modbus TCP 从站两个 daemon 服务线程；
+        - 审查修复（报告13-P1-1）：web_host 显式指定三协议监听地址
+          （缺省跟随 settings 默认 127.0.0.1 仅本机）；modbus_allow_write
+          控制 DO/AO 写回（默认只读）。
         """
         self.build()
         self.start_up_all()
@@ -382,10 +392,11 @@ class Plant:
         if enable_web:
             from scada.web_server import ScadaWebServer      # 局部导入防环
             from scada.modbus_server import ModbusServer
-            web = ScadaWebServer(self)
+            web = ScadaWebServer(self, host=web_host)
             web.start()
             servers.append(web)
-            mb = ModbusServer(self)
+            mb = ModbusServer(self, host=web_host,
+                              allow_write=modbus_allow_write)
             mb.start()
             servers.append(mb)
             print(f"[班次2 SCADA] {web.info()}")
@@ -502,6 +513,12 @@ def parse_args() -> argparse.Namespace:
     # ---- 班次2修改：新增 Web/Modbus 开关 ----
     parser.add_argument("--web", action="store_true",
                         help="启动 SCADA 大屏(REST+WebSocket) 与 Modbus TCP 从站（演示推荐 --speed 1）")
+    # ---- 审查修复（报告13-P1-1）：监听地址显式化 + Modbus 写开关 ----
+    parser.add_argument("--host", default=None,
+                        help="SCADA 三协议(HTTP/WS/Modbus)监听地址；默认 127.0.0.1 仅本机，"
+                             "局域网演示需显式传 0.0.0.0 开放")
+    parser.add_argument("--allow-write", action="store_true",
+                        help="允许 Modbus DO/AO 寄存器写回设备（默认只读；远程控制演示时开启）")
     parser.add_argument("--no-agv", action="store_true",
                         help="关闭 AGV 车队（退回班次1占位搬运，用于回归对照）")
     # ---- 班次3修改：视觉算法回归对照开关 ----
@@ -524,7 +541,9 @@ def main() -> None:
                   enable_random_faults=not args.no_random_faults,
                   enable_agv=not args.no_agv,
                   enable_vision_algo=not args.rule_vision)
-    plant.run(duration=duration, enable_web=args.web)
+    # 审查修复（报告13-P1-1）：--host/--allow-write 经参数传入，不改写 config 全局量
+    plant.run(duration=duration, enable_web=args.web,
+              web_host=args.host, modbus_allow_write=args.allow_write)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,9 @@ STATUS_PERIOD = 30.0            # 控制台状态打印周期（仿真秒）
 # 日志与报告目录（相对项目根，main/selftest 会自动创建）
 LOG_DIR = "logs"                # 事件 JSONL 持久化目录
 REPORT_DIR = "reports"          # 自检报告输出目录
+# 审查修复（报告13-P1-2）：事件 JSONL 按大小轮转，防止单次长跑写满磁盘
+EVENT_LOG_ROTATE_MB = 50        # 单个事件 JSONL 超过该大小(MB)即轮转（0=关闭轮转）
+EVENT_LOG_KEEP = 3              # 轮转后保留的历史文件份数（超出自动删除最旧）
 
 # 随机种子：固定种子保证每次跑批结果一致（作品集可复现性）
 DEFAULT_SEED = 20240501
@@ -117,10 +120,18 @@ SCRIPTED_FAULTS = [
 SCADA_HTTP_PORT = 5080        # Flask SCADA 服务端口（REST + 页面）
 SCADA_WS_PORT = 5081          # WebSocket 实时推送端口（假设：与 HTTP 分端口，
                               # 因 Flask/Werkzeug 原生不支持 WS 升级，改用标准库自研网关）
-SCADA_HTTP_HOST = "0.0.0.0"   # Web 服务监听地址（局域网演示可访问；仅本机可用 127.0.0.1）
+# 审查修复（报告13-P1-1）：三协议(HTTP/WS/Modbus)默认只绑定本机回环地址，
+# 局域网演示时用 CLI --host 0.0.0.0 显式开放（main.py 传参，不在运行期改写本配置）
+SCADA_HTTP_HOST = "127.0.0.1"   # Web 服务监听地址（默认仅本机；--host 可显式开放）
+MODBUS_TCP_HOST = "127.0.0.1"   # Modbus 从站监听地址（默认仅本机；--host 可显式开放）
+SCADA_API_TOKEN = ""            # POST /api/command 命令口令：空=未配置（仅允许本机下发，
+                                # 远程请求一律拒绝并在启动横幅提示）；非空=所有请求必须
+                                # 携带请求头 X-Auth-Token。可用环境变量 SCADA_API_TOKEN 覆盖
 MODBUS_TCP_PORT = 1502        # pymodbus 从站端口（对外暴露 IO 点表）
 MODBUS_UNIT_ID = 1            # Modbus 从站单元号（single=True 模式下任意号均可响应）
 MODBUS_REG_COUNT = 2048       # 保持寄存器区总长度（4x0001~4x2048，映射表见 scada/modbus_server.py）
+MODBUS_ALLOW_WRITE = False    # 审查修复（报告13-P1-1）：DO/AO 写回开关，默认只读；
+                              # 远程控制演示用 CLI --allow-write 显式开启（main.py 传参）
 MODBUS_REFRESH_S = 0.5        # 寄存器刷新周期（墙钟秒；仅用于 IO 镜像节拍，
                               # 不参与任何仿真计时——时间纪律不受影响）
 KPI_BUCKET_S = 60.0           # KPI 趋势直方桶宽（仿真秒）：产量/NG 按此粒度聚合

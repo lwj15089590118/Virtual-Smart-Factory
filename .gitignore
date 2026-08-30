@@ -13,3 +13,7 @@ reports/
 
 # 本地工具产物（DSH 视觉工具箱工作目录）
 .dsh-vision-toolkit/
+
+# 测试/静态检查缓存（审查修复 报告13-P3）
+.pytest_cache/
+.ruff_cache/

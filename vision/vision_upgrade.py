@@ -147,7 +147,11 @@ def install_vision_upgrade(unit_vision, seed: int = S.DEFAULT_SEED) -> VisionAlg
     unit_vision.judge = judge_v3                       # 实例级覆写（注入点）
     unit_vision.last_judge_detail = None               # 判定明细暂存位
     unit_vision.ab_stats = algo.online                 # 在线混淆矩阵（引用共享）
-    unit_vision.algo_info = algo.snapshot()            # 算法档案（snapshot 导出）
+    unit_vision.algo_info = algo.snapshot()            # 算法静态档案（训练指标）
+    # 审查修复（报告13-P2-3）：保留对算法实例的实时引用——UnitVision.snapshot()
+    # 据此每次刷新 online 在线混淆矩阵；此前仅存安装时刻快照导致 Web 端恒显 n=0。
+    # algo_info 字段名与 dict 结构保持向后兼容（键：algo/train_*/online）。
+    unit_vision.vision_algo = algo
     return algo
 
 
@@ -191,6 +195,9 @@ if __name__ == "__main__":
     c = om["confusion"]
     assert c["TP"] + c["FN"] + c["TN"] + c["FP"] == n, "混淆矩阵账目不平"
     assert om["clf_acc"] >= 0.85, f"在线准确率异常: {om['clf_acc']}"
+    # 审查修复回归点（P2-3）：UnitVision.snapshot 的 algo.online 必须实时随推理更新
+    assert vis.snapshot()["algo"]["online"]["n"] == n, \
+        "algo_info 在线指标未随推理刷新（实时引用链断裂）"
     print(f"[vision_upgrade 自检通过] 判定{n}件, 在线准确率={om['clf_acc']*100:.1f}%, "
           f"与规则法一致率={om['agree_rate']*100:.1f}% (仿真验证值)")
     print("  算法档案:", {k: v for k, v in vis.algo_info.items() if k != "online"})
