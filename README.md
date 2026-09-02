@@ -52,8 +52,8 @@
 | 判定算法注入 | `vision/vision_upgrade.py` | 实例级覆写 `UnitVision.judge()`（原类零改动，班次1/2 回归路径保留）；判定明细（P(NG)/特征向量/与规则法对照结论）随质检记录落盘；在线混淆矩阵滚动累计；`--rule-vision` 一键退回规则法对照 |
 | MES 引擎 | `mes/mes_engine.py` | 订阅总线通配符 "*" 自动报工；OEE ≈ 可用率×性能率×良品率（装配单元近似口径）；工单满单自动关单翻单；产品↔托盘↔批次↔工单四级追溯反查；Web 命令按指定数量开单（插单优先投产） |
 | 订单/追溯模型 | `mes/order_model.py` | WorkOrder/Batch 数据模型 + TraceabilityIndex 追溯索引（正查/反查、托盘库位流转历史、QC 档案、容量上限防长跑爆内存） |
-| JSONL 回放 | `mes/jsonl_replay.py` | 离线回放 `logs/events_*.jsonl` 重建完整 MES 台账（与在线台账一致性已入自检 C2）；CLI 直接输出报工报表 |
-| SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库 |
+| JSONL 回放 | `mes/jsonl_replay.py` | 离线回放一个 run 的**全部事件段**（活动文件+轮转历史段 `.1~.N`，段缺失/损坏显著告警不静默跳过）重建完整 MES 台账，并输出"回放总数 vs 各段行数合计"对账（与在线台账一致性+逐条对账已入自检 C2，跨轮转不再丢段——第四轮修补）；CLI 直接输出报工报表 |
+| SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库；保留策略 `tools/db_prune.py`（活数据超 `--max-mb` 按最旧 run 分批清理+VACUUM，至少保最新批次——第四轮修补） |
 | 能耗模型 | `ems/energy_model.py` | 订阅 device.state 按【状态→功率kW】曲线分段积分 kWh（未闭合段快照时虚拟结算）；电费按尖峰平谷分时电价（谷0.35/平0.65/峰1.05 元/kWh，可配/可关）跨档自动切分子段计价并输出分档台账，另折算 CO₂，全部为仿真验证值 |
 | 健康监视 | `ems/health_monitor.py` | 滚动窗口提取 故障次数/停机占比/平均恢复时长/启停切换 → 扣分制 0~100 健康分 + 四级维护建议；跌破阈值发 `ems.health_alert`（滞回防抖）；`ems_maintain / ems_maintain_done` 维护命令闭环（触发 `DeviceBase.enter_maintenance()` 预留接口） |
 | 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/mes/qc_log /api/ems/energy /api/ems/health`（qc_log 为 SQLite 台账判定流水查询，支持 limit/result/wo_id/product_id/run_id 组合过滤）；面板⑨ MES 工单与追溯（支持产品号/托盘号查询 + qc_log 判定流水小表，可按 OK/NG 过滤、点击流水行自动填入追溯框）、面板⑩ 能耗·设备健康度 |
@@ -73,8 +73,14 @@ ruff check .                         # 静态检查（E4/E7/E9+F 基线）
 pytest -m "not smoke"                # 快速测试层（跳过联跑冒烟与网络冒烟，约数秒）
 pytest                               # 全量 21 用例（selftest 17 转接 + SCADA 网络冒烟 4）+ 覆盖率可加 --cov=core --cov=lines ...
 
-# 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
+# 离线回放最新事件流（自动覆盖该 run 的全部轮转段 .1~.N，附回放对账：
+# 回放总数 vs 各段行数合计；段缺失/损坏显著告警），输出 MES 报工报表
 python mes/jsonl_replay.py
+
+# mes.db 保留策略（第四轮修补）：活数据超过上限按最旧 run 分批清理+VACUUM，
+# 至少保留最新批次；先 --dry-run 预览清理计划
+python tools/db_prune.py --max-mb 200 --dry-run
+python tools/db_prune.py --max-mb 200
 
 # ★ 班次2 一键演示：实时模式 + 监控大屏(http://127.0.0.1:5080)
 #   + WebSocket(5081) + Modbus TCP 从站(1502)，Ctrl+C 优雅停机
@@ -182,7 +188,9 @@ Virtual-Smart-Factory/
 │  ├─ INTERVIEW.md            面试弹药库（概念映射三菱/西门子/MCGS + 王牌排障案例）【增强新增】
 │  ├─ DEVELOPMENT.md          开发指南（命令速查/三层测试体系/覆盖率快照）【增强新增】
 │  └─ TUTORIAL_MCGS_OPENPLC.md 组态联动实战教程：MCGS触屏+OpenPLC梯形图接入虚拟产线【增强新增】
-├─ logs/                      运行期生成：events_*.jsonl 事件流
+├─ tools/                     【第四轮修补新增】运维小工具
+│  └─ db_prune.py             mes.db 保留策略（活数据超上限按最旧 run 分批清理+VACUUM，--dry-run 预览）
+├─ logs/                      运行期生成：events_*.jsonl 事件流（含轮转历史段 .1~.N）
 └─ reports/                   运行期生成：selftest_report_*.txt 自检报告
 ```
 

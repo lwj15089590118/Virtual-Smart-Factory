@@ -29,7 +29,8 @@ python soak_run.py --sim-hours 0.5 --sample-min 10 --tag calib   # 快速标定�
 # —— 原有入口不变 ——
 python selftest.py                         # 全厂自检 17 用例 → reports/ 报告
 python main.py --web --speed 10            # 监控大屏 http://127.0.0.1:5080
-python mes/jsonl_replay.py                 # 离线回放 MES 报表
+python mes/jsonl_replay.py                 # 离线回放 MES 报表（自动覆盖全部轮转段+回放对账）
+python tools/db_prune.py --dry-run         # mes.db 保留策略预览（--max-mb 上限，按最旧 run 分批清理+VACUUM）
 
 # 各模块独立自检（含真实 socket/客户端链路的那几个尤其值得单跑）
 python scada/ws_hub.py                     # 真实 TCP 全链路 WebSocket 收发

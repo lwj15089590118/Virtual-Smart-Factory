@@ -620,15 +620,26 @@ def case_mes_trace() -> str:
     assert audit, "开单命令未落 ui.command 审计"
     srv.stop()
     # ---- 断言5：JSONL 回放重建台账与在线一致（交付要求的数据源口径）----
+    # 第四轮修补（复审报告13-P3-4）：replay_file 现覆盖该 run 的全部轮转段
+    # （本用例量级不会触发轮转，segments==1），并附回放对账统计出参。
     plant.bus.close()
-    eng = replay_file(plant.bus.log_path)
+    _rp_stats: dict = {}
+    eng = replay_file(plant.bus.log_path, _rp_stats)
     assert eng.stat_ok == plant.mes.stat_ok and eng.stat_ng == plant.mes.stat_ng, \
         f"回放报工不一致: {eng.stat_ok}/{eng.stat_ng} vs {plant.mes.stat_ok}/{plant.mes.stat_ng}"
+    # 回放对账断言：回放总数=各段行数合计、无坏行，且与在线发布总数逐条相等
+    # （本 run 落盘无 IO 异常，"回放=在线"必须逐条成立——跨轮转场景见
+    #   event_bus/jsonl_replay 模块自检的缩小阈值轮转构造）
+    assert _rp_stats["segments"] >= 1 and _rp_stats["consistent"], \
+        f"回放对账不一致: {_rp_stats}"
+    assert _rp_stats["replayed"] == plant.bus.total_published, \
+        f"回放事件数应等于在线发布总数: {_rp_stats['replayed']} vs {plant.bus.total_published}"
     rt = eng.trace(pallet_id)
     assert rt is not None and rt["chain"]["wo_id"] == wo0.wo_id, "回放后追溯链路断裂"
     return (f"48件全链路闭环: 报工OK{rep['ok']}/NG{rep['ng']}, OEE≈{rep['oee_pct']}%; "
             f"{pallet_id} 归属 {wo0.wo_id}-{chain['batch_id']} 在库{loc}; "
-            f"JSONL回放重建一致 (仿真验证值)")
+            f"JSONL回放重建一致（对账 回放{_rp_stats['replayed']}条=在线{plant.bus.total_published}条）"
+            " (仿真验证值)")
 
 
 def case_ems_energy_health() -> str:

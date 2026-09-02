@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import settings as S
 from core.event_bus import EventTypes
 from main import Plant
+from mes.jsonl_replay import run_segments   # 第四轮修补：终报统计覆盖全部轮转段
 
 
 # ----------------------------------------------------------------------
@@ -277,8 +278,18 @@ def main() -> int:
         days = sim_total / 86400.0
         slope = (growth / days) if days > 0 else 0.0
 
-        jsonl_mb = (os.path.getsize(plant.bus.log_path) / 1048576.0
-                    if plant.bus.log_path and os.path.exists(plant.bus.log_path) else -1.0)
+        # 第四轮修补（复审报告13-P3-4）：事件落盘统计覆盖本 run 的全部轮转段
+        # （活动文件 + .1~.N 历史段）——此前只 getsize 活动文件，50MB×3 轮转后
+        # 最多 3 份历史段（~150MB）被漏计；终报同步注明覆盖的段数与轮转历史段数
+        # （活动文件本身也算一段，轮转历史段数 = 段数-1，避免把活动文件误报成轮转）。
+        segs = []
+        if plant.bus.log_path:
+            try:
+                segs = run_segments(plant.bus.log_path)
+            except FileNotFoundError:
+                segs = []
+        jsonl_mb = (sum(os.path.getsize(s) for s in segs if os.path.exists(s))
+                    / 1048576.0) if segs else -1.0
         db_base = S.MES_DB_PATH
         db_mb = sum(os.path.getsize(db_base + ext) / 1048576.0
                     for ext in ("", "-wal", "-shm")
@@ -317,7 +328,8 @@ def main() -> int:
             f" | 在库 {bal['stock']} | 故障注入 {fault_tally['raised']} 次",
             f"  MES: 工单 {row['mes_orders']} 张（关单 {row['mes_orders_closed']}）| "
             f"OEE≈{rep.get('oee_pct', '-')}%",
-            f"  落盘: 事件 JSONL {jsonl_mb:.1f}MB（{plant.bus.total_published} 条）"
+            f"  落盘: 事件 JSONL {jsonl_mb:.1f}MB（{plant.bus.total_published} 条，"
+            f"覆盖 {len(segs)} 段事件文件/轮转历史 {max(len(segs) - 1, 0)} 段）"
             f" | SQLite 台账 {db_mb:.2f}MB（含 wal/shm）",
             "-" * 78,
             "[五] 校验结论",
