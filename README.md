@@ -36,8 +36,8 @@
 
 | 子系统 | 文件 | 能力 |
 |---|---|---|
-| WebSocket 网关 | `scada/ws_hub.py` | 纯标准库 RFC6455 实现（握手/文本帧/PingPong/Close，长帧三档长度）；每客户端有界发送队列；慢客户端丢帧不阻塞仿真；升级路径精确匹配 + Origin 同源/localhost 白名单（防跨站劫持） |
-| SCADA Web 服务 | `scada/web_server.py` | Flask REST：`/api/status /api/kpi /api/events /api/pallet3d /api/warehouse/locations /api/modbus/map`；POST `/api/command` 命令入口（带 ui.command 审计事件；命令口令校验：未配置 `SCADA_API_TOKEN` 时仅允许本机下发，配置后须携带 `X-Auth-Token` 头）；订阅总线通配符 "*" 实时 WS 推送；KPI 趋势分桶聚合 |
+| WebSocket 网关 | `scada/ws_hub.py` | 纯标准库 RFC6455 实现（握手/文本帧/PingPong/Close，长帧三档长度）；每客户端有界发送队列；慢客户端丢帧不阻塞仿真；升级路径精确匹配 + Origin 同源/localhost 白名单（防跨站劫持）；可选握手鉴权（`?token=` 查询参数或 `X-Auth-Token` 头，常数时间比较） |
+| SCADA Web 服务 | `scada/web_server.py` | Flask REST：`/api/config`（探测是否启用口令，公开布尔位）、`/api/status /api/kpi /api/events /api/pallet3d /api/warehouse/locations /api/modbus/map`；POST `/api/command` 命令入口（带 ui.command 审计事件；命令口令校验：未配置 `SCADA_API_TOKEN` 时仅允许本机下发，配置后须携带 `X-Auth-Token` 头）；非回环绑定+已配置口令时全部 GET 数据端点同样要求 `X-Auth-Token`（401 口径统一）；未配置口令且绑定非回环时启动日志显著警告；订阅总线通配符 "*" 实时 WS 推送；KPI 趋势分桶聚合 |
 | Modbus TCP 从站 | `scada/modbus_server.py` | pymodbus 把全部设备 io_table 映射为保持寄存器（状态码/故障标志/DI/DO/AI×100 定标）；DO/AO 写回设备（**默认只读**，`--allow-write` 开放远程控制演示）；寄存器映射表可经 `/api/modbus/map` 导出给组态软件 |
 | AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系；低电量自动回充排程（<25% 触发·单工位互斥·充至 70% 返岗·任务优先不中断） |
 | 监控大屏 | `web/static/*` | ECharts(本地 vendor 优先 + CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型三视图(等距自绘/真3D/俯视)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
@@ -71,7 +71,7 @@ python selftest.py
 pip install -r requirements-dev.txt  # pytest / pytest-cov / ruff（仅开发期，不进运行时依赖）
 ruff check .                         # 静态检查（E4/E7/E9+F 基线）
 pytest -m "not smoke"                # 快速测试层（跳过联跑冒烟与网络冒烟，约数秒）
-pytest                               # 全量 19 用例（selftest 17 转接 + SCADA 网络冒烟 2）+ 覆盖率可加 --cov=core --cov=lines ...
+pytest                               # 全量 21 用例（selftest 17 转接 + SCADA 网络冒烟 4）+ 覆盖率可加 --cov=core --cov=lines ...
 
 # 离线回放最新事件流，输出 MES 报工报表（作品集"离线数据分析"演示素材）
 python mes/jsonl_replay.py
@@ -79,14 +79,17 @@ python mes/jsonl_replay.py
 # ★ 班次2 一键演示：实时模式 + 监控大屏(http://127.0.0.1:5080)
 #   + WebSocket(5081) + Modbus TCP 从站(1502)，Ctrl+C 优雅停机
 #   网络安全默认（审查修复）：HTTP/WS/Modbus 三协议只绑定本机 127.0.0.1；
-#   /api/command 未配置口令时仅接受本机请求（远程大屏设置环境变量
-#   SCADA_API_TOKEN 后携带 X-Auth-Token 头即可）；Modbus 默认只读
+#   /api/command 未配置口令时仅接受本机请求（配置 SCADA_API_TOKEN 后请求
+#   携带 X-Auth-Token 头即可，大屏会自动提示输入一次并记忆）；Modbus 默认只读
 python main.py --web --speed 10
 
 # 局域网演示（显式开放三协议到所有网卡；注意自行做好网络隔离）：
 python main.py --web --speed 10 --host 0.0.0.0 --allow-write
 #   --host 0.0.0.0   开放 HTTP/WS/Modbus 至局域网
 #   --allow-write    允许 Modbus DO/AO 写回设备（默认只读）
+#   ※ 复审修补：绑定非回环地址且未配置口令时，WS 事件流与只读 API 对局域网
+#     匿名可读，启动日志会显著警告——仅限隔离演示网络；
+#     配置口令后（见下）GET/WS 读取面一并要求鉴权，全接口闭环。
 
 # 浏览器打开大屏后可用按钮控制全厂；第三方组态软件连 Modbus 1502 即可读写点表
 
@@ -107,7 +110,10 @@ python soak_run.py --days 30 --sample-min 60
 #   --no-agv           关闭车队退回班次1占位搬运（回归对照用）
 #   --rule-vision      关闭班次3视觉算法注入（退回班次1规则法，A/B 回归对照用）
 
-# 命令口令（可选）：设置环境变量后，POST /api/command 必须携带 X-Auth-Token 头
+# 命令口令（可选）：设置后 POST /api/command 必须携带 X-Auth-Token 头；
+# 绑定非回环地址(--host 0.0.0.0 等)时 GET/WS 读取面同样要求鉴权（全接口闭环）
+#   大屏：加载时经 /api/config 探测，自动提示输入一次令牌（localStorage 记忆）；
+#   补料桥：python plc_refill_bridge.py --token my-secret（或同名环境变量自动读取）
 # set SCADA_API_TOKEN=my-secret   (Windows)  /  export SCADA_API_TOKEN=my-secret (Linux)
 ```
 
@@ -126,7 +132,7 @@ Virtual-Smart-Factory/
 ├─ requirements-dev.txt       开发期依赖（pytest/pytest-cov/ruff，不进运行时依赖）【增强新增】
 ├─ tests/
 │  ├─ test_plant_selftest.py  pytest 薄壳（参数化转接 selftest 17 用例，smoke 标记）【增强新增】
-│  └─ test_scada_network.py   SCADA 真实网络链路冒烟（WS 全链路+Modbus 读写回，真实起停本地端口）【审查修复新增】
+│  └─ test_scada_network.py   SCADA 真实网络链路冒烟（WS 全链路+WS 握手鉴权+Modbus 读写回+Web 读面鉴权/桥接器凭证头，真实起停本地端口）【审查修复新增·复审修补扩充】
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/
@@ -165,6 +171,7 @@ Virtual-Smart-Factory/
 │  └─ vendor/                 内置 echarts@5.2.2 / echarts-gl@2.0.9（同源首选加载，
 │                             规避浏览器跟踪防护拦截与断网场景）【验收期新增】
 ├─ plc_refill_bridge.py        OpenPLC→产线 补料请求桥接器（线圈上升沿→REST补料，
+│                             --token/SCADA_API_TOKEN 随 X-Auth-Token 头携带，
 │                             配合 docs/TUTORIAL_MCGS_OPENPLC.md 实现梯形图闭环）【增强新增】
 ├─ docs/
 │  ├─ HANDOVER_SHIFT2.md      班次2交接Prompt模板（存档）
@@ -194,7 +201,7 @@ Virtual-Smart-Factory/
 - 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径；数据源：`reports/selftest_report_20260825_145533.txt`）
 - 自检 **17/17 通过**（A1~A9 模块级含有限料仓 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
 - 长程稳定性压测（`soak_run.py`，30 个仿真日 = 2592 万拍，墙钟约 9 分钟）：流出 **79960 件**、满托 1572 托、NG 率稳定 5.6%；内存净增 **+25.7MB（斜率 ≈+0.9 MB/仿真日）**；质检记录环(1万)/AGV完成档(500)/追溯索引(2万) 三大防膨胀机制全部到顶平稳（追溯超限按设计丢弃 11.65 万键）；全程托盘守恒与故障账目（2756 次注入全配对）分毫不差（数据源：`reports/soak_report_soak30d_v3.txt`）
-- 工程质量：ruff 静态检查零告警；pytest 全量用例（薄壳转接 selftest 17 例 + SCADA 真实网络链路冒烟 2 例，含 600s 冒烟）秒级通过；核心产线/调度层覆盖率 74~84%（总体 65%）
+- 工程质量：ruff 静态检查零告警；pytest 全量用例（薄壳转接 selftest 17 例 + SCADA 真实网络链路冒烟 4 例，含 600s 冒烟）秒级通过；核心产线/调度层覆盖率 74~84%（总体 65%）
 
 ## 七、后续班次挂接点速查
 

@@ -19,6 +19,8 @@ plc_refill_bridge.py —— OpenPLC 梯形图 → 虚拟产线 的补料请求�
     python plc_refill_bridge.py                 # 默认参数常驻运行
     python plc_refill_bridge.py --once          # 只跑一轮轮询（调试链路用）
     python plc_refill_bridge.py --plc-port 5020 --coil 0 --rest http://127.0.0.1:5080
+    python plc_refill_bridge.py --token my-secret   # 产线启用命令口令时携带
+                                                    # （缺省自动读环境变量 SCADA_API_TOKEN）
 
 依赖：pymodbus（requirements.txt 已含）。墙钟仅用于轮询节拍——本脚本是
 独立的外部设备模拟器，不触碰任何仿真状态计算，时间纪律不受影响。
@@ -51,6 +53,9 @@ def parse_args():
     p.add_argument("--interval", type=float, default=1.0, help="轮询间隔秒")
     p.add_argument("--rest", default="http://127.0.0.1:5080",
                    help="产线 REST 根地址")
+    p.add_argument("--token", default=os.environ.get("SCADA_API_TOKEN", ""),
+                   help="产线命令口令：服务端设置 SCADA_API_TOKEN 后必须携带；"
+                        "缺省自动读同名环境变量，随 X-Auth-Token 头下发（复审闭环①）")
     p.add_argument("--once", action="store_true", help="只执行一轮轮询后退出")
     return p.parse_args()
 
@@ -69,12 +74,21 @@ def read_coil(cli, args):
         return None
 
 
-def send_refill(rest_base: str) -> tuple:
-    """POST feeder_refill 命令；返回 (是否成功, 回显文本)。"""
+def auth_headers(token: str = "") -> dict:
+    """构造 REST 请求头；token 非空时附带 X-Auth-Token（复审闭环①，
+    与服务端 SCADA_API_TOKEN 同一口令源）。独立成纯函数便于测试静态断言。"""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Auth-Token"] = token
+    return headers
+
+
+def send_refill(rest_base: str, token: str = "") -> tuple:
+    """POST feeder_refill 命令；token 非空时随 X-Auth-Token 头携带。返回 (是否成功, 回显文本)。"""
     body = json.dumps({"cmd": "feeder_refill", "params": {}}).encode("utf-8")
     req = urllib.request.Request(
         rest_base + "/api/command", data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=auth_headers(token), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
             ret = json.loads(r.read().decode("utf-8"))
@@ -91,6 +105,7 @@ def main() -> int:
     print(f"  OpenPLC : {args.plc_ip}:{args.plc_port} 单元{args.unit} "
           f"线圈%QX0.{args.coil}")
     print(f"  产线REST: {args.rest}/api/command (cmd=feeder_refill)")
+    print(f"  命令口令: {'已启用（随请求携带 X-Auth-Token）' if args.token else '未设置（服务端若启用口令将 401）'}")
     print(f"  轮询间隔: {args.interval}s （Ctrl+C 退出）")
     print("=" * 70)
 
@@ -107,7 +122,7 @@ def main() -> int:
                 fired += 1
                 print(f"[plc-bridge] ⚡ 检测到补料请求（上升沿，第 {fired} 次）"
                       f" → 下发 feeder_refill …", flush=True)
-                ok, msg = send_refill(args.rest)
+                ok, msg = send_refill(args.rest, args.token)
                 mark = "✓" if ok else "✗"
                 print(f"[plc-bridge]   {mark} 产线回执: {msg}", flush=True)
             last_state = bool(state) if state is not None else last_state

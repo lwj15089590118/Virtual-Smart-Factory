@@ -10,7 +10,9 @@ web/static/app.js —— SCADA 监控大屏前端逻辑（班次2）
        连续失败自动降级为 REST /api/events 轮询；
     4. 六大图表/面板渲染：流程图(DOM)、趋势折线、NG率仪表盘、垛型3D、
        库位热力图、AGV 物流地图；事件滚动表与设备一览表；
-    5. 控制按钮：POST /api/command → Plant.execute_command()。
+    5. 控制按钮：POST /api/command → Plant.execute_command()
+       （复审修补：服务启用 SCADA_API_TOKEN 时，加载经 /api/config 探测后
+         提示输入一次令牌并 localStorage 记忆，全部 REST/WS 请求自动携带凭证）。
 约定：所有产量/NG率等指标均为仿真验证值。
 ====================================================================== */
 
@@ -35,6 +37,10 @@ const GL_CDNS = [
   'https://unpkg.com/echarts-gl@2.0.9/dist/echarts-gl.min.js',
 ];
 const WS_PORT = 5081;                 // 与 config/settings.py SCADA_WS_PORT 一致
+/* 复审修补（token 生态闭环）：访问令牌状态。口令绝不硬编码进前端——
+   服务端启用时才提示输入一次，localStorage 记忆；未启用时零感知（行为不变）。 */
+const TOKEN_KEY = 'vsf_api_token';
+let authToken = localStorage.getItem(TOKEN_KEY) || '';
 const STATE_COLOR = {
   '运行': '#00e676', '待机': '#ffd54f', '停止': '#90a4ae',
   '故障': '#ff5252', '维护': '#40c4ff',
@@ -71,7 +77,8 @@ let evSeqMax = -1;                    // 已收最大事件 seq（REST 拉取增
 const $ = (id) => document.getElementById(id);
 
 /* ---------------- 启动入口 ---------------- */
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  await initAuth();                     // 复审修补：先解析令牌再开轮询/WS，避免 401 抖动
   bindButtons();
   connectWS();
   setInterval(pollStatus, 1000);
@@ -143,8 +150,46 @@ function toast(msg, isErr) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.className = 'toast'; }, 3500);
 }
+/* ---------------- 访问令牌（复审修补：token 生态闭环 ①） ---------------- */
+function authHeaders() {
+  return authToken ? { 'X-Auth-Token': authToken } : {};
+}
+async function initAuth() {
+  // /api/config 为公开探测端点（只含 auth_required 布尔位，无口令本体）
+  try {
+    const cfg = await fetch('/api/config').then((r) => r.json());
+    if (cfg && cfg.auth_required) {
+      if (!authToken) {
+        const t = window.prompt('服务已启用命令口令(SCADA_API_TOKEN)，请输入访问令牌：');
+        if (t && t.trim()) {
+          authToken = t.trim();
+          localStorage.setItem(TOKEN_KEY, authToken);
+        }
+      }
+    } else if (cfg && !cfg.auth_required && authToken) {
+      authToken = '';                      // 服务端已关闭口令：清理陈旧记忆
+      localStorage.removeItem(TOKEN_KEY);
+    }
+  } catch (e) { /* 探测失败按无令牌继续（回环+无口令的默认部署可用） */ }
+}
 async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers, authHeaders());
   const r = await fetch(path, opts);
+  // 令牌缺失/不匹配时仅对 POST（命令）重新提示一次并重试——GET 轮询静默失败，
+  // 避免秒级轮询触发弹窗轰炸。
+  if (r.status === 401 && opts.method === 'POST') {
+    authToken = '';
+    localStorage.removeItem(TOKEN_KEY);
+    const t = window.prompt('令牌缺失或不匹配，请重新输入访问令牌：');
+    if (t && t.trim()) {
+      authToken = t.trim();
+      localStorage.setItem(TOKEN_KEY, authToken);
+      opts.headers = Object.assign({}, opts.headers, authHeaders());
+      const r2 = await fetch(path, opts);
+      return r2.json();
+    }
+  }
   return r.json();
 }
 async function sendCommand(cmd, params) {
@@ -678,7 +723,10 @@ async function pollLocations() {
    WebSocket 实时事件
 ==================================================================== */
 function connectWS() {
-  const url = `ws://${location.hostname}:${WS_PORT}/ws`;
+  // 复审修补：非回环绑定+口令部署下，WS 握手经 ?token= 查询参数携带凭证
+  // （浏览器 WebSocket API 无法自定义请求头；服务端未启用口令时参数为空，行为不变）
+  const tok = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
+  const url = `ws://${location.hostname}:${WS_PORT}/ws${tok}`;
   try { ws = new WebSocket(url); } catch (e) { fallbackPollEvents(); return; }
   ws.onopen = () => {
     wsRetry = 0;

@@ -26,11 +26,12 @@ scada/ws_hub.py —— WebSocket 实时推送网关（纯标准库实现 RFC 645
 
 import base64
 import hashlib
+import hmac
 import json
 import queue
 import socket
 import threading
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 # RFC 6455 固定魔串：Sec-WebSocket-Accept = base64(sha1(key + GUID))
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -59,10 +60,16 @@ class _Client:
 class WsHub:
     """WebSocket 推送网关：start() 后即可 broadcast()。"""
 
-    def __init__(self, host: str, port: int, path: str = "/ws"):
+    def __init__(self, host: str, port: int, path: str = "/ws",
+                 auth_token: str = ""):
         self.host = host
         self.port = int(port)
         self.path = path                    # 只接受该路径的升级请求（其余 404）
+        # 复审修补（复审报告13 二轮 P2-2）：可选握手鉴权——非空时升级请求必须
+        # 以 ?token= 查询参数（浏览器 WebSocket API 无法自定义头，大屏走此通道）
+        # 或 X-Auth-Token 头（curl/脚本等非浏览器客户端）携带匹配口令，否则 401。
+        # 是否启用由上层决定（web_server：非回环绑定且已配置口令），本类只管执行。
+        self.auth_token = auth_token or ""
         self._srv: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._clients: list = []            # 在线会话列表（受锁保护）
@@ -91,9 +98,15 @@ class WsHub:
             self._srv.close()
         except OSError:
             pass
+        # 复审修补（复审报告13 二轮）：先在锁内摘下花名册、锁外逐个 _drop——
+        # 此前持锁调用 _drop() 而其内部再次获取同一把非重入锁，若 stop 时
+        # 仍有在线客户端（未发 Close 帧即断开）必死锁；既有用例恰好总是
+        # 干净下线后再 stop（列表已空）而从未触发，本次握手鉴权用例暴露。
         with self._lock:
-            for c in list(self._clients):
-                self._drop(c)
+            clients = list(self._clients)
+            self._clients.clear()
+        for c in clients:
+            self._drop(c)
 
     @property
     def running(self) -> bool:
@@ -181,12 +194,17 @@ class WsHub:
         parts = request_line.split(" ")
         # 审查修复（报告13-P2-5）：升级路径精确匹配（剥掉查询串后全等）——
         # 此前 startswith 前缀匹配使 /wsX、/api/x?x=/ws 等路径也能升级
-        target = parts[1].split("?", 1)[0] if len(parts) >= 2 else ""
+        raw_target = parts[1] if len(parts) >= 2 else ""
+        target, _, query = raw_target.partition("?")
         if len(parts) < 2 or target != self.path:
             conn.sendall(b"HTTP/1.1 404 Not Found\r\n\r\n")
             return False
         if not self._origin_allowed(head):
             conn.sendall(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            return False
+        # 复审修补（复审报告13 二轮 P2-2）：路径/Origin 之后校验凭证（401）
+        if not self._token_allowed(head, query):
+            conn.sendall(b"HTTP/1.1 401 Unauthorized\r\n\r\n")
             return False
         key = None
         for line in head.split("\r\n")[1:]:
@@ -203,6 +221,30 @@ class WsHub:
             hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
         conn.sendall(_HANDSHAKE_TMPL.format(accept=accept).encode("ascii"))
         return True
+
+    def _token_allowed(self, head: str, query: str) -> bool:
+        """握手凭证校验（复审修补 复审报告13 二轮 P2-2；auth_token 为空直接放行）：
+        - ?token= 查询参数：浏览器 WebSocket API 无法自定义请求头，大屏走此通道；
+        - X-Auth-Token 头：curl/自检脚本等非浏览器客户端使用；
+        - 比较用 hmac.compare_digest 常数时间比较，防逐字节时序侧信道。"""
+        if not self.auth_token:
+            return True
+        supplied = None
+        if query:
+            try:
+                supplied = (parse_qs(query).get("token") or [None])[0]
+            except ValueError:
+                supplied = None
+        if not supplied:
+            for line in head.split("\r\n")[1:]:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    if k.strip().lower() == "x-auth-token":
+                        supplied = v.strip()
+                        break
+        if not supplied:
+            return False
+        return hmac.compare_digest(supplied, self.auth_token)
 
     @staticmethod
     def _origin_allowed(head: str) -> bool:
@@ -404,6 +446,32 @@ if __name__ == "__main__":
                      b"Origin: http://evil.example.com\r\n\r\n")
     assert b"403" in evil_org.recv(64), "跨站 Origin 未被拒绝"
     evil_org.close()
+
+    # --- 复审修补回归（二轮报告13 P2-2）：握手鉴权（auth_token 非空时生效）---
+    hub_t = WsHub("127.0.0.1", 5092, auth_token="s3cret")
+    hub_t.start()
+    wt.sleep(0.3)
+
+    def shake_token(qs: str = "", extra_head: str = "") -> bytes:
+        tk = socket.create_connection(("127.0.0.1", 5092), timeout=3)
+        tk.sendall((f"GET /ws{qs} HTTP/1.1\r\nHost: 127.0.0.1:5092\r\n"
+                    "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                    f"Sec-WebSocket-Key: {base64.b64encode(os.urandom(16)).decode()}\r\n"
+                    f"Sec-WebSocket-Version: 13\r\n{extra_head}\r\n").encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            resp += tk.recv(256)
+        tk.close()
+        return resp.split(b"\r\n")[0]
+
+    assert b"401" in shake_token(), "无 token 握手未被拒绝"
+    assert b"401" in shake_token(extra_head="X-Auth-Token: wrong\r\n"), \
+        "错 token 握手未被拒绝"
+    assert b"101" in shake_token(qs="?token=s3cret"), "对 token(查询参数) 握手失败"
+    assert b"101" in shake_token(extra_head="X-Auth-Token: s3cret\r\n"), \
+        "对 token(请求头) 握手失败"
+    hub_t.stop()
+    print("[ws_hub 自检] 握手鉴权(无/错 401、对 101) 通过 (仿真验证值)")
 
     # --- 大小两档文本帧广播 + 客户端解码校验 ---
     received = []

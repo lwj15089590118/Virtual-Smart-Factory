@@ -15,6 +15,7 @@ tests/test_scada_network.py —— SCADA 真实网络链路冒烟（审查报告
 import base64
 import hashlib
 import json
+import pathlib
 import socket
 import time
 
@@ -176,3 +177,107 @@ def test_modbus_tcp_read_and_writeback():
     finally:
         cli.close()
         mb.stop()
+
+
+# ======================================================================
+# 复审修补（复审报告13 二轮 P2-1/P2-2）：token 生态闭环 + 非回环读面鉴权
+# ======================================================================
+def test_ws_hub_token_handshake_auth():
+    """复审修补：auth_token 非空时 WS 握手必须携带凭证——
+    无 token/错 token → 401；?token= 查询参数或 X-Auth-Token 头任一匹配 → 101。
+    （auth_token 为空的既有行为由上方用例覆盖：直接 101，不受影响。）"""
+    hub = WsHub("127.0.0.1", _free_tcp_port(), auth_token="s3cret")
+    hub.start()
+    time.sleep(0.3)
+    try:
+        def shake(qs: str = "", extra_head: str = ""):
+            cli = socket.create_connection(("127.0.0.1", hub.port), timeout=3)
+            key = base64.b64encode(b"\x02" * 16).decode()
+            cli.sendall((f"GET /ws{qs} HTTP/1.1\r\nHost: 127.0.0.1:{hub.port}\r\n"
+                         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                         f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                         + extra_head + "\r\n").encode())
+            resp = _read_until(cli, b"\r\n\r\n")
+            cli.close()
+            return resp.split(b"\r\n")[0]
+
+        assert b"401" in shake(), "无 token 握手未被拒绝"
+        assert b"401" in shake(extra_head="X-Auth-Token: wrong\r\n"), \
+            "错 token 握手未被拒绝"
+        assert b"101" in shake(qs="?token=s3cret"), "对 token(查询参数) 握手失败"
+        assert b"101" in shake(extra_head="X-Auth-Token: s3cret\r\n"), \
+            "对 token(请求头) 握手失败"
+    finally:
+        hub.stop()
+    assert not hub.running
+
+
+def test_web_read_face_token_and_bridge_headers(monkeypatch, capsys):
+    """复审修补（闭环①+②）：桥接器凭证头静态断言；Web 读面鉴权按
+    「绑定地址 × 是否配置口令」四象限行为断言（关 token 分支=修复前行为）；
+    非回环+无 token 启动提示含显著安全警告。全程 Flask test_client，不起长驻服务。"""
+    # --- 闭环①：桥接器凭证头（纯函数断言 + CLI/env 接线静态断言）---
+    from plc_refill_bridge import auth_headers
+    assert auth_headers("tk") == {"Content-Type": "application/json",
+                                  "X-Auth-Token": "tk"}, "带 token 请求头错误"
+    assert auth_headers("") == {"Content-Type": "application/json"}, \
+        "无 token 时不得携带 X-Auth-Token（关 token 行为必须与既往一致）"
+    src = (pathlib.Path(__file__).resolve().parents[1]
+           .joinpath("plc_refill_bridge.py").read_text(encoding="utf-8"))
+    assert '"--token"' in src and "SCADA_API_TOKEN" in src \
+        and "send_refill(args.rest, args.token)" in src, \
+        "桥接器 --token/env 接线缺失"
+
+    from main import Plant
+    from scada.web_server import ScadaWebServer
+
+    plant = Plant(speed=60, mode="fast", seed=S.DEFAULT_SEED,
+                  enable_random_faults=False)
+    plant.build()
+    plant.start_up_all()
+    hdr = {"X-Auth-Token": "s3cret"}
+
+    # --- ② 开 token + 非回环绑定：GET/WS/POST 数据面全部要求凭证 ---
+    monkeypatch.setenv("SCADA_API_TOKEN", "s3cret")
+    srv = ScadaWebServer(plant, host="0.0.0.0")
+    c = srv.app.test_client()
+    assert srv.read_auth_required is True
+    assert c.get("/api/config").status_code == 200, "/api/config 必须公开供前端探测"
+    assert c.get("/api/config").get_json()["auth_required"] is True
+    for path in ("/api/status", "/api/kpi", "/api/events?n=5", "/api/mes/orders"):
+        assert c.get(path).status_code == 401, f"匿名 GET {path} 未被拒绝"
+        assert c.get(path, headers={"X-Auth-Token": "wrong"}).status_code == 401, \
+            f"错 token GET {path} 未被拒绝"
+        assert c.get(path, headers=hdr).status_code == 200, f"对 token GET {path} 失败"
+    assert c.post("/api/command", json={"cmd": "door_open"}).status_code == 401
+    assert c.post("/api/command", json={"cmd": "door_open"},
+                  headers=hdr).status_code == 200
+    assert c.get("/").status_code == 200, "静态页面必须放行（否则无法输入令牌）"
+    srv.stop()
+
+    # --- 开 token + 回环绑定（默认部署）：GET 匿名 200（旧行为），POST 须 token ---
+    srv_l = ScadaWebServer(plant, host="127.0.0.1")
+    c = srv_l.app.test_client()
+    assert srv_l.read_auth_required is False
+    assert c.get("/api/status").status_code == 200, "回环 GET 匿名行为不得改变"
+    assert c.post("/api/command", json={"cmd": "door_open"}).status_code == 401
+    assert c.post("/api/command", json={"cmd": "door_open"},
+                  headers=hdr).status_code == 200
+    srv_l.stop()
+
+    # --- 关 token（默认回环）：GET/POST 全匿名 = 修复前行为 ---
+    monkeypatch.delenv("SCADA_API_TOKEN", raising=False)
+    srv_o = ScadaWebServer(plant, host="127.0.0.1")
+    c = srv_o.app.test_client()
+    assert c.get("/api/status").status_code == 200
+    assert c.post("/api/command", json={"cmd": "door_open"}).status_code == 200
+    srv_o._print_security_notices()
+    assert "安全警告" not in capsys.readouterr().out, "回环绑定不应触发 ⚠ 警告"
+    srv_o.stop()
+
+    # --- 非回环 + 无 token：既有提示保留，且新增显著安全警告 ---
+    srv_w = ScadaWebServer(plant, host="0.0.0.0")
+    srv_w._print_security_notices()
+    out = capsys.readouterr().out
+    assert "安全警告" in out and "匿名可读" in out, "非回环+无口令缺少显著安全警告"
+    srv_w.stop()

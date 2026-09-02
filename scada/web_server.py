@@ -4,6 +4,7 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
 =========================================================================
 职责（班次2 交付项1）：
     1. REST API（端口 settings.SCADA_HTTP_PORT）：
+       GET  /api/config                 前端探测是否启用命令口令（公开布尔位，无口令本体）
        GET  /api/status                 全厂状态快照（各单元/故障/AGV/时钟）
        GET  /api/kpi                    KPI 指标 + 产量/NG 趋势序列（仿真验证值）
        GET  /api/events?n=50&type=      最近事件查询（EventBus.recent）
@@ -19,6 +20,8 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
        GET  /api/mes/qc_log             质检判定流水（增强：SQLite 台账查询，可组合过滤）
        GET  /api/ems/energy             全厂能耗快照（kWh/电费/CO₂ 仿真验证值）
        GET  /api/ems/health             设备健康评分 + 维护建议
+       （复审修补 复审报告13 二轮 P2-2：非回环绑定+已配置口令时，全部 GET 数据
+         端点要求 X-Auth-Token 头，由 before_request 守卫统一拦截，401 口径一致）
     2. WebSocket 推送（端口 settings.SCADA_WS_PORT，scada/ws_hub.py 实现）：
        订阅 EventBus 通配符 "*"，每条事件实时 JSON 群发给在线大屏；
     3. 静态页面：web/static/index.html + app.js + style.css（ECharts CDN）。
@@ -29,6 +32,8 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
       GIL 与幂等设计兜底——这是全软件仿真的稳妥取舍。
 """
 
+import hmac
+import ipaddress
 import json
 import os
 import sys
@@ -112,10 +117,19 @@ class ScadaWebServer:
         self.plant = plant
         self.host = host or S.SCADA_HTTP_HOST
         self.bus: EventBus = plant.bus
-        # ---- WebSocket 推送网关（独立端口；与 HTTP 同地址绑定）----
-        self.hub = WsHub(self.host, S.SCADA_WS_PORT)
         # ---- 审查修复：命令口令（环境变量 SCADA_API_TOKEN 优先，其次 settings）----
         self.command_token = os.environ.get("SCADA_API_TOKEN") or S.SCADA_API_TOKEN
+        # ---- 复审修补（复审报告13 二轮 P2-2）：读面鉴权开关 ----
+        # 非回环绑定(0.0.0.0/局域网IP/空串) 且已配置口令 → WS 握手与全部 /api
+        # GET 数据端点一并要求凭证；回环绑定（默认）保持旧行为——GET/WS 匿名，
+        # 仅 POST /api/command 受口令保护，确保既有部署/selftest 行为不变。
+        self.loopback_bind = self._is_loopback_host(self.host)
+        self.read_auth_required = bool(self.command_token) and not self.loopback_bind
+        # ---- WebSocket 推送网关（独立端口；与 HTTP 同地址绑定）----
+        # 需要读面鉴权时把口令交给 WS 握手校验（?token= 查询参数或 X-Auth-Token 头）
+        self.hub = WsHub(self.host, S.SCADA_WS_PORT,
+                         auth_token=(self.command_token
+                                     if self.read_auth_required else ""))
         # ---- 事件通配符订阅 → WS 广播（交付要求：订阅事件总线通配符）----
         self._ws_token = self.bus.subscribe("*", self._on_any_event,
                                             "WS推送网关")
@@ -128,6 +142,37 @@ class ScadaWebServer:
         self._flask_thread: Optional[threading.Thread] = None
         self._running = False
 
+    @staticmethod
+    def _is_loopback_host(host: str) -> bool:
+        """绑定地址是否为回环（127.x/::1/localhost）；空串/0.0.0.0/:: 视为全网卡开放。"""
+        h = (host or "").strip().lower()
+        if h in ("", "0.0.0.0", "::", "*"):
+            return False
+        if h == "localhost":
+            return True
+        try:
+            return ipaddress.ip_address(h).is_loopback
+        except ValueError:
+            return False
+
+    def _print_security_notices(self) -> None:
+        """启动横幅安全提示（start() 调用；独立成方法便于测试断言）。"""
+        if not self.command_token:
+            # 审查修复（报告13-P1-1）：未配置口令时明确告知暴露面收窄策略
+            print("[SCADA-Web] 安全提示: 未配置命令口令(SCADA_API_TOKEN)，"
+                  "POST /api/command 仅允许本机(127.0.0.1)请求，远程主机一律拒绝；"
+                  "如需远程下发命令请设置环境变量 SCADA_API_TOKEN 并携带 X-Auth-Token 头")
+            # 复审修补（复审报告13 二轮 P2-2）：显式开放监听却无口令 → 读面裸奔，显著警告
+            if not self.loopback_bind:
+                print(f"[SCADA-Web] ⚠ 安全警告: 绑定地址 {self.host} 为非回环且未配置口令——"
+                      "WS 事件流与全部只读 API(/api/*) 对局域网匿名可读，"
+                      "仅限隔离演示网络使用；建议设置 SCADA_API_TOKEN 启用全接口鉴权")
+        elif self.read_auth_required:
+            # 复审修补（复审报告13 二轮 P2-2）：全接口鉴权已启用的明示
+            print(f"[SCADA-Web] 安全提示: 已启用命令口令且绑定非回环地址({self.host})——"
+                  "GET/WS 读取面同样要求凭证（HTTP 头 X-Auth-Token；"
+                  "WS 握手用 ?token= 查询参数或同名请求头）")
+
     # ------------------------------------------------------------------
     # 生命周期
     # ------------------------------------------------------------------
@@ -136,11 +181,7 @@ class ScadaWebServer:
         if self._running:
             return
         self._running = True
-        if not self.command_token:
-            # 审查修复（报告13-P1-1）：未配置口令时明确告知暴露面收窄策略
-            print("[SCADA-Web] 安全提示: 未配置命令口令(SCADA_API_TOKEN)，"
-                  "POST /api/command 仅允许本机(127.0.0.1)请求，远程主机一律拒绝；"
-                  "如需远程下发命令请设置环境变量 SCADA_API_TOKEN 并携带 X-Auth-Token 头")
+        self._print_security_notices()
         self.hub.start()
         self._flask_thread = threading.Thread(
             target=self._serve_http, name="ScadaWebThread", daemon=True)
@@ -184,6 +225,36 @@ class ScadaWebServer:
         @app.route("/")
         def page_index():
             return send_from_directory(WEB_STATIC_DIR, "index.html")
+
+        # ---------- 前端配置探测（公开，复审修补 复审报告13 二轮 P2-1）----------
+        @app.route("/api/config")
+        def api_config():
+            """大屏加载时先探测是否启用了命令口令：启用则提示输入一次令牌
+            （localStorage 记忆）并随请求携带 X-Auth-Token。
+            只暴露"是否启用"布尔位与凭证形态，绝不含口令本体。"""
+            return jsonify({"ok": True,
+                            "auth_required": bool(self.command_token),
+                            "token_header": "X-Auth-Token"})
+
+        # ---------- 读面鉴权守卫（复审修补 复审报告13 二轮 P2-2）----------
+        # 仅当「已配置口令 且 绑定非回环」时生效：全部 /api GET 数据端点要求
+        # X-Auth-Token；静态页面放行（浏览器须先加载页面才能输入令牌）；
+        # /api/config 放行（公开探测端点）。回环绑定（默认）不进入此分支，
+        # 行为与既往完全一致；POST /api/command 由路由内部自行鉴权。
+        @app.before_request
+        def _guard_read_face():
+            if not self.read_auth_required:
+                return None
+            if request.method not in ("GET", "HEAD"):
+                return None
+            if not request.path.startswith("/api/") or request.path == "/api/config":
+                return None
+            supplied = request.headers.get("X-Auth-Token", "")
+            if not supplied or not hmac.compare_digest(supplied, self.command_token):
+                return jsonify({"ok": False,
+                                "msg": "读取被拒绝：服务以口令+非回环绑定运行，"
+                                       "GET 数据端点要求 X-Auth-Token 头"}), 401
+            return None
 
         # ---------- 全厂状态 ----------
         @app.route("/api/status")
@@ -311,8 +382,11 @@ class ScadaWebServer:
             # 口令已配置（环境变量 SCADA_API_TOKEN 或 settings）：所有请求（含本机）
             # 必须携带 X-Auth-Token 头，口径统一无旁路；
             # 口令未配置：仅信任本机(127.0.0.1/::1)请求，远程一律 403（启动横幅有提示）。
+            # 复审修补（复审报告13 二轮 P2-2）：改 hmac.compare_digest 常数时间比较，
+            # 防令牌逐字节时序侧信道（与非回环读面鉴权同一口径）。
             if self.command_token:
-                if request.headers.get("X-Auth-Token", "") != self.command_token:
+                supplied = request.headers.get("X-Auth-Token", "")
+                if not supplied or not hmac.compare_digest(supplied, self.command_token):
                     return jsonify({"ok": False,
                                     "msg": "命令被拒绝：X-Auth-Token 缺失或不匹配"}), 401
             elif request.remote_addr not in ("127.0.0.1", "::1"):
