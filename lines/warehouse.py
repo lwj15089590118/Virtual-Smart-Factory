@@ -2,19 +2,19 @@
 """
 lines/warehouse.py —— 立体库简化模型
 ======================================
-职责（本班次先做数据结构与队列调度，班次2 接 AGV 搬运后扩展）：
+职责（本阶段先做数据结构与队列调度，阶段2 接 AGV 搬运后扩展）：
     1. 库位表：4排 × 10列 × 5层 = 200 个库位，编号 A-{排}-{列}-{层}；
     2. 入库队列：满托到达 → 排队 → 堆垛机按 WH_TASK_TIME 完成上架；
-    3. 出库队列：FIFO 出库请求 → 下架 → 托盘进入 out_staging（班次2 由 AGV 运走）;
+    3. 出库队列：FIFO 出库请求 → 下架 → 托盘进入 out_staging（阶段2 由 AGV 运走）;
     4. 全部动作产生事件（wh.inbound_done / wh.outbound_done）。
-扩展点（班次2）：
+扩展点（阶段2）：
     - request_inbound/request_outbound 就是 AGV 任务接口：AGV 到达→取托→回库
       的过程只需在编排层把"占位搬运"替换为 AGV 状态机；
     - 库位表 locations() 可直接渲染为 Web 端库存热力图。
 
 假设记录：
-    - 本班次堆垛机内置建模（单巷道单堆垛机串行作业），AGV 段由编排器占位，
-      因此端到端物流在本班次即可闭环演示。
+    - 本阶段堆垛机内置建模（单巷道单堆垛机串行作业），AGV 段由编排器占位，
+      因此端到端物流在本阶段即可闭环演示。
 """
 
 from collections import deque
@@ -50,7 +50,7 @@ class Warehouse(DeviceBase):
         # ---- 任务队列 ----
         self.inbound_q: Deque[str] = deque()         # 待入库 pallet_id 队列
         self.outbound_q: Deque[Optional[str]] = deque()  # 待出库请求（None=FIFO 任选最早）
-        self.out_staging: List[dict] = []            # 已出库待运走托盘（班次2 AGV 取）
+        self.out_staging: List[dict] = []            # 已出库待运走托盘（阶段2 AGV 取）
         self.stored_index: Dict[str, str] = {}       # pallet_id -> loc_id 反查表
         # ---- 堆垛机当前任务 ----
         self._task_type: Optional[str] = None        # "IN" / "OUT"
@@ -71,7 +71,7 @@ class Warehouse(DeviceBase):
         self.add_io("ai_crane_level", "AI", 0.0, "层", "堆垛机当前层")
 
     # ------------------------------------------------------------------
-    # 对外任务接口（班次2 AGV 调度对接点）
+    # 对外任务接口（阶段2 AGV 调度对接点）
     # ------------------------------------------------------------------
     def request_inbound(self, pallet_id: str) -> bool:
         """申请入库：托盘进入入库排队（重复申请幂等拒绝）。"""
@@ -195,7 +195,7 @@ class Warehouse(DeviceBase):
         return len(self.stored_index)
 
     def locations(self) -> List[dict]:
-        """导出全库位表快照（班次2 库存热力图数据源）。"""
+        """导出全库位表快照（阶段2 库存热力图数据源）。"""
         return [dict(rec) for rec in self._locations.values()]
 
     def snapshot(self) -> dict:

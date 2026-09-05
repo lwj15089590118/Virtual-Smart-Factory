@@ -4,12 +4,12 @@ lines/unit_vision.py —— 视觉质检单元
 ======================================
 职责：
     1. 从装配单元流出队列逐件取品，占用检测站 VISION_INSPECT_TIME 仿真秒；
-    2. 判定规则（班次3 将替换为真实深度学习算法推理，本班次用规则模拟）：
+    2. 判定规则（阶段3 将替换为真实深度学习算法推理，本阶段用规则模拟）：
        关键尺寸 = 名义值 + N(0, σ) 过程散布，|偏差| ≤ 公差 → OK，否则 NG；
        理论 NG 率 ≈ 4.6%（仿真验证值：σ=0.04, 公差±0.08, 名义 10.00mm）；
     3. NG 品分流到返修道（rework_lane），OK 品进入流出队列供码垛；
-    4. 全部判定写入质检记录 qc_records（班次3/SPC 分析的数据源）。
-扩展点（班次3）：
+    4. 全部判定写入质检记录 qc_records（阶段3/SPC 分析的数据源）。
+扩展点（阶段3）：
     - 覆写 judge() 方法即可接入真实模型，其余流程零改动；
     - qc_records 结构已含算法所需的原始测量字段。
 
@@ -52,7 +52,7 @@ class UnitVision(DeviceBase):
         # ---- 检测站内部状态 ----
         self._current: Optional[Product] = None      # 正在检测的产品
         self._timer = 0.0                            # 已检测耗时
-        # 班次3修改后修复：NG 剔除挡板脉冲保持截止时刻（None=挡板已复位）。
+        # 阶段3修改后修复：NG 剔除挡板脉冲保持截止时刻（None=挡板已复位）。
         # 修复记录：原实现同一 tick 内置 1 又清 0，脉宽为 0，
         # Modbus(0.5s 刷新)/大屏永远采样不到该信号——现按 VISION_REJECT_PULSE_S 保持。
         self._reject_until: Optional[float] = None
@@ -70,7 +70,7 @@ class UnitVision(DeviceBase):
         self.add_io("ai_measure_dim", "AI", 0.0, "mm", "关键尺寸测量值")
 
     # ------------------------------------------------------------------
-    # 判定核心（班次3 接真实算法时只需覆写本方法）
+    # 判定核心（阶段3 接真实算法时只需覆写本方法）
     # ------------------------------------------------------------------
     def judge(self, product: Product) -> tuple:
         """
@@ -110,7 +110,7 @@ class UnitVision(DeviceBase):
                 self._set_state(DeviceState.STANDBY, "待检队列空")
             return
 
-        # 检测进行中：模拟光源与测量值输出（供班次2 Modbus/UI 观测）
+        # 检测进行中：模拟光源与测量值输出（供阶段2 Modbus/UI 观测）
         # 计时累加 9 位舍入，防止长跑浮点漂移（与 SimClock 同款处理）
         self._timer = round(self._timer + dt, 9)
         self.set_io("ai_light_intensity", 100.0)
@@ -119,7 +119,7 @@ class UnitVision(DeviceBase):
 
         # ---- 检测完成：判定 + 分流 + 记录 ----
         result, dim = self.judge(self._current)
-        # 班次3修改：取走算法包(vision/vision_upgrade.py)暂存的判定明细，
+        # 阶段3修改：取走算法包(vision/vision_upgrade.py)暂存的判定明细，
         # 并入质检记录与 vision.ok/ng 事件负载；规则法路径下该字段为 None，行为不变。
         algo_detail = getattr(self, "last_judge_detail", None)
         if hasattr(self, "last_judge_detail"):
@@ -137,7 +137,7 @@ class UnitVision(DeviceBase):
             "tol_mm": S.VISION_TOLERANCE,
         }
         if algo_detail:
-            record.update(algo_detail)      # 班次3修改：A/B对照/概率/特征向量随事件落盘
+            record.update(algo_detail)      # 阶段3修改：A/B对照/概率/特征向量随事件落盘
         self.qc_records.append(record)
         self.cycle_count += 1
 
@@ -175,7 +175,7 @@ class UnitVision(DeviceBase):
             "queue_len": len(self.inbound),
             "rework_len": len(self.rework_lane),
         })
-        # 班次3修改：注入了升级算法时，导出算法档案（训练指标/在线混淆矩阵）
+        # 阶段3修改：注入了升级算法时，导出算法档案（训练指标/在线混淆矩阵）
         if getattr(self, "algo_info", None):
             info = dict(self.algo_info)                 # 静态档案（训练指标，安装时定格）
             algo = getattr(self, "vision_algo", None)

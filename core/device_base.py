@@ -5,7 +5,7 @@ core/device_base.py —— 设备基类（全厂所有单元/设备的公共骨�
 提供：
     1. 五态状态机：停止 STOPPED / 待机 STANDBY / 运行 RUNNING / 故障 FAULT / 维护 MAINTENANCE
        （迁移规则集中在 _set_state，子类不得绕过）；
-    2. IO 点表：DI/DO/AI/AO 四类点位，班次2 将原样映射为 Modbus 寄存器；
+    2. IO 点表：DI/DO/AI/AO 四类点位，阶段2 将原样映射为 Modbus 寄存器；
     3. 统计计数：运行秒数、循环数、停机原因 Counter；
     4. 故障注入接口：apply_fault() / clear_fault()，全部产生事件。
 时间纪律：
@@ -34,7 +34,7 @@ class DeviceState:
     STANDBY = "待机"        # 已启动、等待条件（料/联锁满足）
     RUNNING = "运行"        # 正在执行工艺动作
     FAULT = "故障"          # 存在未复位故障
-    MAINTENANCE = "维护"    # 维护模式（班次3 健康模块驱动）
+    MAINTENANCE = "维护"    # 维护模式（阶段3 健康模块驱动）
 
 
 class IOPoint:
@@ -52,7 +52,7 @@ class IOPoint:
         self.desc = desc            # 中文描述
 
     def snapshot(self) -> dict:
-        """导出为字典（控制台打印 / 班次2 Modbus 映射 / Web 展示共用）。"""
+        """导出为字典（控制台打印 / 阶段2 Modbus 映射 / Web 展示共用）。"""
         return {"name": self.name, "dir": self.direction, "value": self.value,
                 "unit": self.unit, "desc": self.desc}
 
@@ -131,7 +131,7 @@ class DeviceBase:
             self._set_state(DeviceState.STANDBY, "人工启动")
 
     def enter_maintenance(self) -> None:
-        """进入维护模式（预留：班次3 健康模块调度）。"""
+        """进入维护模式（预留：阶段3 健康模块调度）。"""
         self._set_state(DeviceState.MAINTENANCE, "进入维护")
 
     def exit_maintenance(self) -> None:
@@ -192,7 +192,7 @@ class DeviceBase:
             self.run_seconds += dt
 
     # ------------------------------------------------------------------
-    # 快照（控制台打印 / 自检断言 / 班次2 Web 共用）
+    # 快照（控制台打印 / 自检断言 / 阶段2 Web 共用）
     # ------------------------------------------------------------------
     def snapshot(self) -> dict:
         """导出设备当前摘要信息。"""

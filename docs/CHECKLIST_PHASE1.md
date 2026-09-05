@@ -1,17 +1,17 @@
-# 班次1 自检清单（Self-Check Checklist）
+# 阶段1 自检清单（Self-Check Checklist）
 
-> 使用方法：交付验收时逐项打勾。全部满足 = 班次1 验收通过。
+> 使用方法：交付验收时逐项打勾。全部满足 = 阶段1 验收通过。
 > 自动验证命令：`python selftest.py`（应输出 9/9 通过并生成 reports/ 报告）
 
 ## A. 硬性要求符合性
 
 - [x] ① Windows 10 + Python 3.12 运行通过（实测 3.12.10）
-- [x] ① 仅用标准库 + numpy + flask + pymodbus（班次1 实际只用标准库+numpy；flask/pymodbus 仅在 requirements 声明预留）
+- [x] ① 仅用标准库 + numpy + flask + pymodbus（阶段1 实际只用标准库+numpy；flask/pymodbus 仅在 requirements 声明预留）
 - [x] ② 全部代码中文注释（每个模块 docstring + 关键行注释 + 假设记录）
 - [x] ② 每个文件完整可运行：8 个核心/单元文件均有 `__main__` 内置自检，可单独执行
 - [x] ③ 全软件仿真、零硬件依赖
 - [x] ③ 关键指标标注"仿真验证值"（README 指标表 / 自检报告 / 控制台打印）
-- [x] ④ 后续班次扩展点已留（见 README 第五节速查表 + `Plant._install_extension_hooks` 注释）
+- [x] ④ 后续阶段扩展点已留（见 README 第五节速查表 + `Plant._install_extension_hooks` 注释）
 
 ## B. 十项交付范围逐项核对
 
@@ -24,7 +24,7 @@
 | 5 | unit_assembly | 8 步顺控；安全门开→暂停；急停→全线停；节拍可配 | selftest A5（32s×10 精确产出+双联锁）| ✅ |
 | 6 | unit_vision | 每件判定 OK/NG；NG 分流返修道；输出质检记录 | selftest A6（500件 NG率5.0% vs 理论4.6%）| ✅ |
 | 7 | unit_palletizing | 3×4×4 垛型；垛满→托盘输出→AGV 呼叫事件 | selftest A7（48格坐标唯一+AGV呼叫）| ✅ |
-| 8 | warehouse | 库位表 + 入库/出库队列（数据结构优先，班次2接AGV） | selftest A8（200库位+库位复用）| ✅ |
+| 8 | warehouse | 库位表 + 入库/出库队列（数据结构优先，阶段2接AGV） | selftest A8（200库位+库位复用）| ✅ |
 | 9 | main.py | 一键启动；控制台实时状态与产量统计；--speed 倍率 | 实测 fast@60x 900s 与 realtime@60x 60s | ✅ |
 | 10 | selftest.py | 逐模块自检 + 10 分钟加速联跑冒烟 + 自检报告 | 9/9 PASS，报告落盘 reports/ | ✅ |
 
@@ -48,10 +48,10 @@
 
 ## E. 已知假设记录（决策留痕）
 
-1. 原料无限供应（班次2 接立体库出库后改有限料仓）
+1. 原料无限供应（阶段2 接立体库出库后改有限料仓）
 2. 空托盘供应无限
 3. 急停复位后断点续走（保留步计时器剩余量）
 4. 安全门保持期间不计运行秒数（保持≠有效加工）
-5. 占位 AGV 固定 15s 搬运（班次2 替换为真实车队状态机）
+5. 占位 AGV 固定 15s 搬运（阶段2 替换为真实车队状态机）
 6. 视觉规则判定 σ=0.04mm / 公差±0.08mm → 理论 NG≈4.6%
-7. 本班次堆垛机内置建模使端到端物流闭环可演示
+7. 本阶段堆垛机内置建模使端到端物流闭环可演示

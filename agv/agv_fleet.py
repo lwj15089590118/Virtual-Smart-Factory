@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-agv/agv_fleet.py —— AGV 车队仿真（班次2：替换班次1的占位搬运调度）
+agv/agv_fleet.py —— AGV 车队仿真（阶段2：替换阶段1的占位搬运调度）
 ====================================================================
 职责：
     1. 车队规模 ≥2 台（settings.AGV_COUNT），每台 AGV 是一个标准 DeviceBase
@@ -14,9 +14,9 @@ agv/agv_fleet.py —— AGV 车队仿真（班次2：替换班次1的占位搬�
     3. 调度器 AGVFleet：订阅 agv.call 事件建档入库任务；轮询 warehouse.out_staging
        建档出库任务；空闲车按先到先得领单（假设：单托任务，不做多托拼车）；
     4. 全部计时走 clock.now()/update(dt)，位置推进按 恒速×dt 的欧氏直线模型，
-       计时累加 round(t+dt, 9) 防浮点漂移——时间纪律与班次1完全一致。
+       计时累加 round(t+dt, 9) 防浮点漂移——时间纪律与阶段1完全一致。
 
-扩展点（班次3）：
+扩展点（阶段3）：
     - 多车路径规划/交通管制：只需替换 AGVFleet.assign() 与 AGV._move_toward()；
     - 电量调度/充电排程：battery 字段已就绪，可接 EMS 优化算法。
 
@@ -351,7 +351,7 @@ class AGVFleet:
 
     def on_agv_call(self, event: dict) -> None:
         """
-        【班次2修改】替换 Plant._on_agv_call 占位调度的事件入口：
+        【阶段2修改】替换 Plant._on_agv_call 占位调度的事件入口：
         码垛垛满 → agv.call → 建立入库任务（PAL-OUT → WH-IN）。
         （事件里的 from/to 是设备端口描述，此处统一映射到厂内站点坐标表）
         """
@@ -443,7 +443,7 @@ class AGVFleet:
     # ------------------------------------------------------------------
     def active_inbound_pallets(self) -> List[str]:
         """仍在车队手里（已呼叫未交付库口）的入库托盘号列表——
-        兼容 Plant._agv_transit 的托盘守恒口径（班次2修改）。"""
+        兼容 Plant._agv_transit 的托盘守恒口径（阶段2修改）。"""
         return [t.pallet_id for t in
                 list(self.pending) + list(self.active.values())
                 if t.task_type == "入库"]

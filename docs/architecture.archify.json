@@ -9,7 +9,7 @@
     "views": [
       { "id": "main-path", "label": "主数据链路", "focus": ["screen", "scada", "plant", "line", "agv", "wh"], "note": "从监控大屏入口沿编排驱动与物料流走到立体库。" },
       { "id": "event-hub", "label": "事件中枢与消费方", "focus": ["bus", "log", "mes", "ems"], "note": "全部子系统的客观事实都从事件总线单向流出。" },
-      { "id": "algo-inject", "label": "算法注入点", "focus": ["vision", "line"], "note": "班次3视觉算法以实例级覆写进入质检单元。" }
+      { "id": "algo-inject", "label": "算法注入点", "focus": ["vision", "line"], "note": "阶段3视觉算法以实例级覆写进入质检单元。" }
     ]
   },
   "components": [

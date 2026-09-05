@@ -1,8 +1,8 @@
 # Virtual-Smart-Factory 依赖清单（Windows 10 + Python 3.12）
 # 原则：只用标准库 + numpy + flask + pymodbus，前端 ECharts 走 CDN 不进依赖。
 #
-# 班次1 实际使用：numpy（视觉尺寸高斯采样）
-# 班次2 预留：flask（SCADA Web 服务）、pymodbus（Modbus TCP 从站）
+# 阶段1 实际使用：numpy（视觉尺寸高斯采样）
+# 阶段2 预留：flask（SCADA Web 服务）、pymodbus（Modbus TCP 从站）
 numpy>=2.0
 flask>=3.0
 # 锁定 <3.7：3.7+ 重构数据存储层（ModbusSlaveContext 移除/更名、旧接口 v4 将移除），

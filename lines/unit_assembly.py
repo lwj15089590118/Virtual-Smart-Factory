@@ -14,7 +14,7 @@ lines/unit_assembly.py —— 装配单元（以 PLC 顺控/梯图思想实现�
 假设记录：
     - 急停复位后产品保留在工位、当前步骤从头计时（比"丢弃在制品"更稳妥，
       且与真实产线"急停后重新启动当前工步"的惯例一致）；
-    - 原料经内嵌有限料仓供应（增强：落地班次1预留的扩展点——料空冻结于
+    - 原料经内嵌有限料仓供应（增强：落地阶段1预留的扩展点——料空冻结于
       "等待上料"步，补料后断点续走；低水位滞回告警，支持手动/自动补料）。
 """
 
@@ -68,7 +68,7 @@ class UnitAssembly(DeviceBase):
         self._starving = False               # 料空冻结节拍中（补料后自动续走）
 
     # ------------------------------------------------------------------
-    # IO 点表（DI/DO/AI/AO —— 班次2 将按此表映射 Modbus 寄存器）
+    # IO 点表（DI/DO/AI/AO —— 阶段2 将按此表映射 Modbus 寄存器）
     # ------------------------------------------------------------------
     def _init_io(self) -> None:
         self.add_io("di_door_closed", "DI", 1, desc="安全门关闭信号(1=关)")
@@ -86,7 +86,7 @@ class UnitAssembly(DeviceBase):
                     "件", "料仓余量(件)")
 
     # ------------------------------------------------------------------
-    # 对外操作接口（班次2 Web 按钮 / 自检脚本调用）
+    # 对外操作接口（阶段2 Web 按钮 / 自检脚本调用）
     # ------------------------------------------------------------------
     def set_door(self, open_: bool) -> None:
         """设置安全门状态：True=开门（触发保持联锁）。"""
@@ -209,7 +209,7 @@ class UnitAssembly(DeviceBase):
         self._step_index = (self._step_index + 1) % len(STEP_ORDER)
 
     def _drive_outputs(self, step_name: str, dur: float) -> None:
-        """按当前步刷新 DO/AI 点位（模拟真实执行机构反馈，供班次2 Modbus 映射）。"""
+        """按当前步刷新 DO/AI 点位（模拟真实执行机构反馈，供阶段2 Modbus 映射）。"""
         g = 1 if not self._hold else 0
         self.set_io("do_stack_g", g)
         self.set_io("do_conveyor_run", 1 if step_name in ("输送入站", "输送流出") else 0)

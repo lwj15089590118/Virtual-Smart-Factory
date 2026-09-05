@@ -2,29 +2,29 @@
 """
 main.py —— Virtual-Smart-Factory 编排入口
 ======================================================================
-班次1：仿真内核与产线层；班次2修改：接入真实 AGV 车队 + --web SCADA 服务。
+阶段1：仿真内核与产线层；阶段2修改：接入真实 AGV 车队 + --web SCADA 服务。
 =======================================================================
 职责：
     1. 组装全厂：时钟 → 事件总线 → 设备注册表 → 故障注入器 → 四大单元；
     2. 物流接线：装配流出 → 视觉质检 → OK品码垛 → 满托呼叫AGV
-       → 【班次2：agv/agv_fleet.py 车队状态机搬运】→ 立体库入库；
+       → 【阶段2：agv/agv_fleet.py 车队状态机搬运】→ 立体库入库；
        出库段：堆垛机下架 → out_staging → AGV 运抵出货口（出厂计数）;
     3. 驱动循环：把"全厂 update"注册为时钟的每 tick 回调，
        实时模式(--mode realtime)与加速批量模式(--mode fast)走同一条推进路径，
        保证加速跑批结果一致；
     4. 控制台仪表：每 STATUS_PERIOD 仿真秒打印各单元状态与产量统计；
-    5. 班次2新增：--web 启动 Flask REST+WebSocket 大屏 与 pymodbus 从站，
+    5. 阶段2新增：--web 启动 Flask REST+WebSocket 大屏 与 pymodbus 从站，
        大屏按钮经 POST /api/command → Plant.execute_command() 公开方法。
 
 启动方式：
     python main.py                          # 默认 fast 加速跑 600 仿真秒, 倍率10x
     python main.py --speed 60               # 1/10/60 倍率预设（也接受任意正数）
     python main.py --mode realtime          # 实时模式（墙钟按倍率节拍）
-    python main.py --web                    # ★班次2演示：实时模式 + 监控大屏 + Modbus(1502)
+    python main.py --web                    # ★阶段2演示：实时模式 + 监控大屏 + Modbus(1502)
     python main.py --duration 3600 --seed 42
     python main.py --no-random-faults       # 关闭随机故障（脚本故障保留）
 
-扩展点（后续班次挂接处，均有注释标记 [班次2✔已实现] / [班次3]）：
+扩展点（后续阶段挂接处，均有注释标记 [阶段2✔已实现] / [阶段3]）：
     - SCADA/MES/EMS：订阅事件总线即可，见 Plant._install_extension_hooks()
 """
 
@@ -47,7 +47,7 @@ from lines.unit_assembly import UnitAssembly
 from lines.unit_vision import UnitVision
 from lines.unit_palletizing import UnitPalletizing
 from lines.warehouse import Warehouse
-from agv.agv_fleet import AGVFleet          # 班次2修改：引入真实 AGV 车队
+from agv.agv_fleet import AGVFleet          # 阶段2修改：引入真实 AGV 车队
 from config import settings as S
 
 
@@ -58,7 +58,7 @@ class Plant:
                  mode: str = "fast",
                  seed: int = S.DEFAULT_SEED,
                  enable_random_faults: bool = True,
-                 enable_agv: bool = True,                # 班次2修改：允许关闭车队做回归对照
+                 enable_agv: bool = True,                # 阶段2修改：允许关闭车队做回归对照
                  enable_vision_algo: Optional[bool] = None,  # 修复：None=跟随 S.VISION_ALGO_ENABLE；
                  enable_ems: bool = True,                # 修复：EMS 装配开关（对齐 VISION/MES 风格）
                  feeder_auto_refill: Optional[bool] = None):  # 审查修复：None=跟随 S 配置；
@@ -81,7 +81,7 @@ class Plant:
         self.devices: Dict[str, DeviceBase] = {
             d.device_id: d for d in
             (self.assembly, self.vision, self.palletizer, self.warehouse)}
-        # ---- 班次2修改：真实 AGV 车队（替换班次1占位调度）----
+        # ---- 阶段2修改：真实 AGV 车队（替换阶段1占位调度）----
         # 车辆一并注册进 devices：全线急停/人工复位天然覆盖车队
         self.enable_agv = enable_agv
         self.agv_fleet: Optional[AGVFleet] = None
@@ -91,7 +91,7 @@ class Plant:
             for agv in self.agv_fleet.agvs.values():
                 self.devices[agv.device_id] = agv
         # ---- 故障注入（总开关恒开：急停联锁必须始终可用；--no-random-faults 只关随机子开关）----
-        #     班次2修改：把 AGV 低频随机故障并入配置（车队容错演示用）
+        #     阶段2修改：把 AGV 低频随机故障并入配置（车队容错演示用）
         rates = dict(S.RANDOM_FAULT_RATES)
         rates.update(S.AGV_RANDOM_FAULT_RATES)
         types_pool = dict(S.RANDOM_FAULT_TYPES)
@@ -104,13 +104,13 @@ class Plant:
             random_rates=rates, random_types=types_pool)
         # ---- 占位 AGV 在途任务表（仅 enable_agv=False 的回归模式使用）----
         self._agv_transit_legacy: List[list] = []    # [due_sim_s, pallet_id]
-        # ---- 出库演示游标（班次2修改：每入库 N 托触发一次 FIFO 出库）----
+        # ---- 出库演示游标（阶段2修改：每入库 N 托触发一次 FIFO 出库）----
         self._outbound_mark = 0
         # ---- 状态打印节拍 ----
         self._next_report_at = S.STATUS_PERIOD
         # ---- 全厂急停标志 ----
         self.line_estop_latched = False
-        # ---- 班次3修改：扩展子系统占位（build() 时在 _install_extension_hooks 装配）----
+        # ---- 阶段3修改：扩展子系统占位（build() 时在 _install_extension_hooks 装配）----
         self.vision_algo = None      # 视觉算法升级包句柄（None=仍为规则法）
         self.mes = None              # MES 引擎（工单/追溯/报工）
         self.ems_energy = None       # EMS 能耗模型
@@ -123,7 +123,7 @@ class Plant:
 
     @property
     def _agv_transit(self) -> List[str]:
-        """兼容属性（班次2修改）：班次1为占位在途表，现委托车队查询'已呼叫未交付库口'的托盘。
+        """兼容属性（阶段2修改）：阶段1为占位在途表，现委托车队查询'已呼叫未交付库口'的托盘。
         selftest B1 托盘守恒口径继续可用；无车队模式退回旧表。"""
         if self.agv_fleet is not None:
             return self.agv_fleet.active_inbound_pallets()
@@ -136,19 +136,19 @@ class Plant:
         """物流接线 + 订阅关系 + 注册每 tick 回调。重复调用幂等。"""
         # 1) 时钟每 tick 回调 = 全厂步进（两种模式共用同一路径）
         self.clock.set_step_callback(self.update)
-        # 2) 班次2修改：码垛满托 agv.call 改由真实 AGV 车队接管建档
+        # 2) 阶段2修改：码垛满托 agv.call 改由真实 AGV 车队接管建档
         if self.agv_fleet is not None:
             self.bus.subscribe(EventTypes.AGV_CALL, self._on_agv_call, "AGV车队调度")
         else:
-            # 无车队回归模式：沿用班次1占位逻辑（PLACEHOLDER 时间后直送库口）
+            # 无车队回归模式：沿用阶段1占位逻辑（PLACEHOLDER 时间后直送库口）
             self.bus.subscribe(EventTypes.AGV_CALL, self._on_agv_call, "占位AGV调度")
-        # 3) 扩展点安装（本班次为空实现+注释说明）
+        # 3) 扩展点安装（本阶段为空实现+注释说明）
         self._install_extension_hooks()
 
     def _on_agv_call(self, event: dict) -> None:
         """
-        【班次2修改】原占位调度已被真实 AGV 车队状态机替换；
-        本方法保留为转发壳以兼容旧调用方（有车队转车队，无车队走班次1占位）。
+        【阶段2修改】原占位调度已被真实 AGV 车队状态机替换；
+        本方法保留为转发壳以兼容旧调用方（有车队转车队，无车队走阶段1占位）。
         """
         pallet_id = event["data"]["pallet_id"]
         if self.agv_fleet is not None:
@@ -159,34 +159,34 @@ class Plant:
 
     def _install_extension_hooks(self) -> None:
         """
-        后续班次扩展点（集中声明，防止散落改动）：
+        后续阶段扩展点（集中声明，防止散落改动）：
         -------------------------------------------------
-        [班次2✔] SCADA Web 服务：scada/web_server.py（Flask REST+WebSocket 推送），
+        [阶段2✔] SCADA Web 服务：scada/web_server.py（Flask REST+WebSocket 推送），
                  由 run(enable_web=True) / main.py --web 启动；
-        [班次2✔] Modbus TCP 从站：scada/modbus_server.py（io_table→保持寄存器）；
-        [班次2✔] 真实 AGV 调度：agv/agv_fleet.py 替换占位搬运；
-        [班次3✔] 视觉算法：vision/vision_upgrade.py 注入覆写 UnitVision.judge()
+        [阶段2✔] Modbus TCP 从站：scada/modbus_server.py（io_table→保持寄存器）；
+        [阶段2✔] 真实 AGV 调度：agv/agv_fleet.py 替换占位搬运；
+        [阶段3✔] 视觉算法：vision/vision_upgrade.py 注入覆写 UnitVision.judge()
                  （保留规则法做 A/B 对照；--rule-vision 可退回规则法回归对照）；
-        [班次3✔] MES：mes/mes_engine.py 订阅事件总线自动报工/追溯/OEE；
-        [班次3✔] EMS：ems/energy_model.py 能耗积分 + ems/health_monitor.py 健康评分，
+        [阶段3✔] MES：mes/mes_engine.py 订阅事件总线自动报工/追溯/OEE；
+        [阶段3✔] EMS：ems/energy_model.py 能耗积分 + ems/health_monitor.py 健康评分，
                  均只订阅 EventTypes 事件，不侵入仿真内核。
         """
-        # ---- 班次3修改：视觉算法升级包注入（实例级覆写 judge，原类零改动）----
+        # ---- 阶段3修改：视觉算法升级包注入（实例级覆写 judge，原类零改动）----
         # 修复记录：改用实例开关 enable_vision_algo 判断（CLI --rule-vision 走传参），
         # 配置中心 S.VISION_ALGO_ENABLE 仍作为默认值保留，运行期不再被外部改写
         if self.enable_vision_algo and S.VISION_ALGO_ENABLE:
             from vision.vision_upgrade import install_vision_upgrade
             self.vision_algo = install_vision_upgrade(self.vision, seed=self.seed)
-            print(f"[班次3 视觉] 判定算法已注入: {self.vision_algo.ALGO_ID} "
+            print(f"[阶段3 视觉] 判定算法已注入: {self.vision_algo.ALGO_ID} "
                   f"(训练准确率{self.vision_algo.train_metrics['accuracy'] * 100:.1f}%"
                   f"/查全{self.vision_algo.train_metrics['recall'] * 100:.1f}%，仿真验证值)")
-        # ---- 班次3修改：MES 引擎（订阅 "*" 自动建档报工）----
+        # ---- 阶段3修改：MES 引擎（订阅 "*" 自动建档报工）----
         if S.MES_ENGINE_ENABLE:
             from mes.mes_engine import MESEngine
             self.mes = MESEngine(self)
-            print(f"[班次3 MES] 引擎已挂接，首张工单 {self.mes.orders[0].wo_id}"
+            print(f"[阶段3 MES] 引擎已挂接，首张工单 {self.mes.orders[0].wo_id}"
                   f"(计划{self.mes.orders[0].target_qty}件)")
-        # ---- 班次3修改：EMS 能耗模型 + 健康监视器（纯事件驱动，零内核侵入）----
+        # ---- 阶段3修改：EMS 能耗模型 + 健康监视器（纯事件驱动，零内核侵入）----
         # 修复记录：受 EMS_ENABLE / enable_ems 双重开关控制（此前无条件装配，
         # 与 VISION/MES 的开关风格不一致）；关闭时 Web /api/ems/* 自动降级 enabled=False
         if self.enable_ems:
@@ -194,14 +194,14 @@ class Plant:
             from ems.health_monitor import HealthMonitor
             self.ems_energy = EnergyModel(self)
             self.ems_health = HealthMonitor(self)
-            print("[班次3 EMS] 能耗模型与健康监视器已订阅事件总线")
+            print("[阶段3 EMS] 能耗模型与健康监视器已订阅事件总线")
 
     # ==================================================================
     # 每 tick 全厂步进（顺序即物料流向，先注入故障再让设备响应）
     # ==================================================================
     def update(self, dt: float) -> None:
         now = self.clock.now()
-        # 0) 占位在途结算（仅 enable_agv=False 的回归模式；班次2修改）
+        # 0) 占位在途结算（仅 enable_agv=False 的回归模式；阶段2修改）
         if self.agv_fleet is None and self._agv_transit_legacy:
             due_now = [t for t in self._agv_transit_legacy if t[0] <= now]
             if due_now:
@@ -211,7 +211,7 @@ class Plant:
                     [t for t in self._agv_transit_legacy if t[0] > now]
         # 1) 故障注入器先行（本 tick 的故障立刻被下方设备逻辑感知）
         self.injector.update(dt)
-        # 1.5) 班次2修改：AGV 车队步进（派单+六阶段状态机；交付动作写库口队列）
+        # 1.5) 阶段2修改：AGV 车队步进（派单+六阶段状态机；交付动作写库口队列）
         if self.agv_fleet is not None:
             self.agv_fleet.update(dt)
         # 2) 产线单元按物料流方向推进
@@ -232,7 +232,7 @@ class Plant:
         self.palletizer.update(dt)
         # 3) 立体库（含 AGV 交付的入库队列 / 出库任务下架）
         self.warehouse.update(dt)
-        # 3.5) 班次2修改：出库演示——每入库 OUTBOUND_DEMO_EVERY_N 托，
+        # 3.5) 阶段2修改：出库演示——每入库 OUTBOUND_DEMO_EVERY_N 托，
         #      自动申请一托 FIFO 出库（堆垛机下架→out_staging→车队运抵出货口）
         if (S.OUTBOUND_DEMO_EVERY_N > 0
                 and self.warehouse.inbound_done - self._outbound_mark
@@ -268,7 +268,7 @@ class Plant:
 
     def pallet_balance(self) -> dict:
         """
-        托盘守恒分解（班次2修改：B1 不变量4 的权威口径）。
+        托盘守恒分解（阶段2修改：B1 不变量4 的权威口径）。
         恒等式：完成托 = 在库 + 入库队列 + AGV入库在途 + 出库暂存
                               + AGV出库在途(已装车未出厂) + 已出厂
         """
@@ -294,7 +294,7 @@ class Plant:
 
     def execute_command(self, cmd: str, params: Optional[dict] = None) -> dict:
         """
-        【班次2新增】Web 大屏命令统一入口：REST /api/command → 本方法 → 公开API。
+        【阶段2新增】Web 大屏命令统一入口：REST /api/command → 本方法 → 公开API。
         只做参数校验与既有公开方法调用，不侵入仿真内核；返回 {"ok": bool, "msg": str}。
         """
         params = params or {}
@@ -337,7 +337,7 @@ class Plant:
                 msg = (f"出库申请已受理：{pid or 'FIFO最早托'}（车队将自动建档运输）"
                        if ok else "出库申请被拒绝（托不在库或请求积压）")
                 return {"ok": bool(ok), "msg": msg}
-            # ---- 班次3修改：MES/EMS 命令（沿用班次2 REST 命令分发模式）----
+            # ---- 阶段3修改：MES/EMS 命令（沿用阶段2 REST 命令分发模式）----
             if cmd == "mes_new_order":              # 手动开立工单（qty/model 可选）
                 if getattr(self, "mes", None) is None:
                     return {"ok": False, "msg": "MES 引擎未启用"}
@@ -380,7 +380,7 @@ class Plant:
         启动仿真：
         - fast 模式：同步满速跑完 duration 仿真秒（自检冒烟同款路径）；
         - realtime 模式：后台线程按倍率推进，Ctrl+C 优雅退出；
-        - 班次2修改：enable_web=True 时同时启动 SCADA Web(REST+WS) 与
+        - 阶段2修改：enable_web=True 时同时启动 SCADA Web(REST+WS) 与
           Modbus TCP 从站两个 daemon 服务线程；
         - 审查修复（报告13-P1-1）：web_host 显式指定三协议监听地址
           （缺省跟随 settings 默认 127.0.0.1 仅本机）；modbus_allow_write
@@ -399,8 +399,8 @@ class Plant:
                               allow_write=modbus_allow_write)
             mb.start()
             servers.append(mb)
-            print(f"[班次2 SCADA] {web.info()}")
-        print("\n=== Virtual-Smart-Factory 班次2 启动 ===")
+            print(f"[阶段2 SCADA] {web.info()}")
+        print("\n=== Virtual-Smart-Factory 阶段2 启动 ===")
         print(f"模式={self.mode} | 倍率={self.clock.speed}x | 步长={self.clock.dt}s | "
               f"时长={duration if duration else '∞(Ctrl+C退出)'} 仿真秒 | 种子={self.seed}"
               f" | AGV={'%d台' % len(self.agv_fleet.agvs) if self.agv_fleet else '关闭'}")
@@ -426,7 +426,7 @@ class Plant:
             print("\n[收到 Ctrl+C] 正在优雅停机…")
             self.clock.pause()
         finally:
-            for srv in servers:              # 班次2修改：停 Web/Modbus 服务
+            for srv in servers:              # 阶段2修改：停 Web/Modbus 服务
                 try:
                     srv.stop()
                 except Exception:
@@ -437,7 +437,7 @@ class Plant:
         """停机：停时钟、关总线、打终报。"""
         self.clock.stop()
         self.print_status(force=True, final=True)
-        # 班次3修改：终报追加 MES 报工摘要（仿真验证值）
+        # 阶段3修改：终报追加 MES 报工摘要（仿真验证值）
         if getattr(self, "mes", None) is not None:
             rep = self.mes.report()
             print(f"[MES 报工] 判定{rep['judged']}件(OK{rep['ok']}/NG{rep['ng']}) "
@@ -446,7 +446,7 @@ class Plant:
                   f"工单{len(self.mes.orders)}张 满托{rep['pallets_done']} 出厂{rep['shipped']}")
             # 增强：规范关闭 SQLite 台账连接（写入均已即时 commit，此处仅收尾）
             self.mes.close()
-        # 班次3修改：终报追加 EMS 能耗/健康摘要（均为仿真验证值）
+        # 阶段3修改：终报追加 EMS 能耗/健康摘要（均为仿真验证值）
         if getattr(self, "ems_energy", None) is not None:
             es = self.ems_energy.snapshot()
             hs = self.ems_health.snapshot()
@@ -464,7 +464,7 @@ class Plant:
     # 控制台仪表盘
     # ==================================================================
     def print_status(self, force: bool = False, final: bool = False) -> None:
-        """打印全厂状态块（控制台版仪表盘；班次2 由 Web 端替代）。"""
+        """打印全厂状态块（控制台版仪表盘；阶段2 由 Web 端替代）。"""
         a, v, p, w = (self.assembly.snapshot(), self.vision.snapshot(),
                       self.palletizer.snapshot(), self.warehouse.snapshot())
         bar = "-" * 74
@@ -484,7 +484,7 @@ class Plant:
         inj = self.injector.snapshot()
         active = ", ".join(f"{f['dev']}:{f['type']}" for f in inj["active"]) or "无"
         print(f"故障注入 | 累计:{inj['injected_total']} 生效中: {active}")
-        # 班次2修改：控制台同步显示 AGV 车队行（与 Web 大屏同源数据）
+        # 阶段2修改：控制台同步显示 AGV 车队行（与 Web 大屏同源数据）
         if self.agv_fleet is not None:
             fs = self.agv_fleet.snapshot()
             cars = ", ".join(
@@ -499,18 +499,18 @@ class Plant:
 # ----------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Virtual-Smart-Factory 班次2：SCADA监控层+AGV物流+Web可视化（全软件仿真，指标均为仿真验证值）")
+        description="Virtual-Smart-Factory 阶段2：SCADA监控层+AGV物流+Web可视化（全软件仿真，指标均为仿真验证值）")
     parser.add_argument("--speed", type=float, default=S.DEFAULT_SPEED,
                         help="加速倍率：推荐 1/10/60（默认10）")
     parser.add_argument("--mode", choices=["fast", "realtime"], default=None,
-                        help="fast=加速批量；realtime=实时墙钟模式（班次2修改：--web 未指定时默认 realtime）")
+                        help="fast=加速批量；realtime=实时墙钟模式（阶段2修改：--web 未指定时默认 realtime）")
     parser.add_argument("--duration", type=float, default=None,
-                        help="运行时长（仿真秒；班次2修改：默认无——普通跑600，--web 跑到 Ctrl+C）")
+                        help="运行时长（仿真秒；阶段2修改：默认无——普通跑600，--web 跑到 Ctrl+C）")
     parser.add_argument("--seed", type=int, default=S.DEFAULT_SEED,
                         help="全局随机种子（保证可复现）")
     parser.add_argument("--no-random-faults", action="store_true",
                         help="关闭随机故障（脚本故障仍生效）")
-    # ---- 班次2修改：新增 Web/Modbus 开关 ----
+    # ---- 阶段2修改：新增 Web/Modbus 开关 ----
     parser.add_argument("--web", action="store_true",
                         help="启动 SCADA 大屏(REST+WebSocket) 与 Modbus TCP 从站（演示推荐 --speed 1）")
     # ---- 审查修复（报告13-P1-1）：监听地址显式化 + Modbus 写开关 ----
@@ -520,22 +520,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-write", action="store_true",
                         help="允许 Modbus DO/AO 寄存器写回设备（默认只读；远程控制演示时开启）")
     parser.add_argument("--no-agv", action="store_true",
-                        help="关闭 AGV 车队（退回班次1占位搬运，用于回归对照）")
-    # ---- 班次3修改：视觉算法回归对照开关 ----
+                        help="关闭 AGV 车队（退回阶段1占位搬运，用于回归对照）")
+    # ---- 阶段3修改：视觉算法回归对照开关 ----
     parser.add_argument("--rule-vision", action="store_true",
-                        help="关闭班次3视觉算法注入（退回班次1规则法判定，用于 A/B 回归对照）")
+                        help="关闭阶段3视觉算法注入（退回阶段1规则法判定，用于 A/B 回归对照）")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    # 班次2修改：--web 默认走实时模式（大屏按钮的 暂停/倍率 才有墙钟语义）
+    # 阶段2修改：--web 默认走实时模式（大屏按钮的 暂停/倍率 才有墙钟语义）
     mode = args.mode or ("realtime" if args.web else "fast")
-    # 班次2修改：时长缺省语义 —— 普通跑批 600s；--web 长驻直到 Ctrl+C
+    # 阶段2修改：时长缺省语义 —— 普通跑批 600s；--web 长驻直到 Ctrl+C
     duration = args.duration
     if duration is None:
         duration = None if args.web else S.DEFAULT_RUN_SECONDS
-    # 班次3修改：--rule-vision 退回规则法判定
+    # 阶段3修改：--rule-vision 退回规则法判定
     # 修复记录：改为向 Plant 传参（enable_vision_algo=False），不再改写 S.VISION_ALGO_ENABLE 全局量
     plant = Plant(speed=args.speed, mode=mode, seed=args.seed,
                   enable_random_faults=not args.no_random_faults,

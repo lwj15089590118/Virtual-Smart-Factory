@@ -2,7 +2,7 @@
 """
 scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推送）
 =========================================================================
-职责（班次2 交付项1）：
+职责（阶段2 交付项1）：
     1. REST API（端口 settings.SCADA_HTTP_PORT）：
        GET  /api/config                 前端探测是否启用命令口令（公开布尔位，无口令本体）
        GET  /api/status                 全厂状态快照（各单元/故障/AGV/时钟）
@@ -13,7 +13,7 @@ scada/web_server.py —— SCADA Web 服务（Flask REST + WebSocket 实时推�
        GET  /api/modbus/map             Modbus 保持寄存器映射表（点表文档化）
        POST /api/command {"cmd":...}    大屏按钮命令 → Plant 公开方法（带审计事件；
                                         审查修复：命令口令校验，见 SCADA_API_TOKEN）
-       ---- 班次3修改：MES/EMS 扩展路由 ----
+       ---- 阶段3修改：MES/EMS 扩展路由 ----
        GET  /api/mes/orders             工单台账 + 报工报表（产量/良率/OEE 仿真验证值）
        GET  /api/mes/batches            批次台账（?wo_id= 过滤）
        GET  /api/mes/trace?query=       产品/托盘全链路追溯反查
@@ -397,7 +397,7 @@ class ScadaWebServer:
             cmd = str(body.get("cmd", ""))
             params = body.get("params") or {}
             result = plant.execute_command(cmd, params if isinstance(params, dict) else {})
-            # 命令审计落总线（JSONL 同步留痕，班次3/MES 可追溯操作者动作）
+            # 命令审计落总线（JSONL 同步留痕，阶段3/MES 可追溯操作者动作）
             self.bus.publish("SCADA-WEB", EventTypes.UI_COMMAND,
                              {"cmd": cmd, "params": params,
                               "ok": bool(result.get("ok"))},
@@ -406,7 +406,7 @@ class ScadaWebServer:
             return jsonify(result), code
 
         # ==============================================================
-        # 班次3修改：MES / EMS 扩展路由（沿用现有 jsonify+ok 字段风格）
+        # 阶段3修改：MES / EMS 扩展路由（沿用现有 jsonify+ok 字段风格）
         # ==============================================================
         @app.route("/api/mes/orders")
         def api_mes_orders():
@@ -535,7 +535,7 @@ if __name__ == "__main__":
     for path in ("/api/kpi", "/api/events?n=10", "/api/pallet3d",
                  "/api/warehouse/locations", "/api/modbus/map",
                  "/api/mes/orders", "/api/mes/batches",
-                 "/api/ems/energy", "/api/ems/health"):   # 班次3修改：新路由纳入冒烟
+                 "/api/ems/energy", "/api/ems/health"):   # 阶段3修改：新路由纳入冒烟
         with urllib.request.urlopen(base + path, timeout=3) as r:
             data = json.loads(r.read().decode("utf-8"))
             assert data.get("ok") is True, f"{path} 返回异常"

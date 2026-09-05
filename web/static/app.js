@@ -1,6 +1,6 @@
 'use strict';
 /* =====================================================================
-web/static/app.js —— SCADA 监控大屏前端逻辑（班次2）
+web/static/app.js —— SCADA 监控大屏前端逻辑（阶段2）
 ======================================================================
 职责：
     1. 多 CDN 依次回退加载 ECharts 5 与 echarts-gl（bar3D 垛型用）；
@@ -54,7 +54,7 @@ const EVT_LABEL = {
   'clock.pause': '时钟暂停', 'clock.resume': '时钟恢复',
   'assembly.door_hold': '门开保持', 'assembly.door_resume': '关门恢复',
   'ui.command': '大屏命令',
-  // 班次3修改：MES/EMS 事件中文名
+  // 阶段3修改：MES/EMS 事件中文名
   'mes.order_created': '工单开立', 'mes.order_closed': '工单关单',
   'ems.health_alert': '健康告警', 'ems.maintenance': '维护动作',
   // 增强：AGV 回充排程事件中文名
@@ -85,7 +85,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   setInterval(pollKpi, 2000);
   setInterval(pollPallet, 1000);
   setInterval(pollLocations, 3000);
-  // 班次3修改：MES 工单面板(3s) 与 EMS 能耗/健康面板(2s) 轮询
+  // 阶段3修改：MES 工单面板(3s) 与 EMS 能耗/健康面板(2s) 轮询
   setInterval(pollMes, 3000);
   setInterval(pollEms, 2000);
   pollStatus(); pollPallet(); pollLocations(); pollMes(); pollEms();
@@ -213,7 +213,7 @@ function bindButtons() {
   $('btnDoorClose').onclick = () => sendCommand('door_close');
   $('btnOutbound').onclick  = () => sendCommand('outbound');
   $('btnEstop').onclick     = () => sendCommand('estop');
-  // 班次3修改：MES 追溯查询按钮（回车同效）
+  // 阶段3修改：MES 追溯查询按钮（回车同效）
   $('btnTrace').onclick     = runTrace;
   $('traceInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTrace(); });
   // 增强：qc_log 流水小表过滤切换（立即重拉一次）
@@ -777,7 +777,7 @@ function summarize(ev) {
     case 'wh.inbound_done':   return `${d.pallet_id} 上架 ${d.loc_id}（在库${d.stock}）`;
     case 'wh.outbound_done':  return `${d.pallet_id} 下架（在库${d.stock}）`;
     case 'ui.command':        return `屏幕命令: ${d.cmd} ${JSON.stringify(d.params || {})}`;
-    // 班次3修改：MES/EMS 事件摘要
+    // 阶段3修改：MES/EMS 事件摘要
     case 'mes.order_created': return `开立 ${d.wo_id} 型号${d.model} 计划${d.target_qty}件`;
     case 'mes.order_closed':  return `${d.wo_id} 完工关单（OK${d.ok}/NG${d.ng}）`;
     case 'ems.health_alert':  return `${d.dev_id} 健康分 ${d.score}：${d.advice}`;
@@ -923,7 +923,7 @@ function initCharts() {
     ],
   });
 
-  /* ---- ⑩ 能耗横向条形图（班次3修改：/api/ems/energy 数据源）---- */
+  /* ---- ⑩ 能耗横向条形图（阶段3修改：/api/ems/energy 数据源）---- */
   charts.energy = echarts.init($('chartEnergy'));
   charts.energy.setOption({
     backgroundColor: 'transparent',
@@ -981,7 +981,7 @@ function drawAgvFromCache() {
 }
 
 /* =====================================================================
-   班次3修改：MES 工单面板（/api/mes/orders + /api/mes/trace）
+   阶段3修改：MES 工单面板（/api/mes/orders + /api/mes/trace）
    增强：追加 qc_log 判定流水小表（/api/mes/qc_log，SQLite 台账）
 ==================================================================== */
 let energyCache = { devices: [] };      // 能耗面板缓存（图表 tooltip 用）
@@ -1089,7 +1089,7 @@ async function runTrace() {
 }
 
 /* =====================================================================
-   班次3修改：EMS 能耗/健康面板（/api/ems/energy + /api/ems/health）
+   阶段3修改：EMS 能耗/健康面板（/api/ems/energy + /api/ems/health）
 ==================================================================== */
 async function pollEms() {
   await Promise.all([pollEnergy(), pollHealth()]);
@@ -1101,7 +1101,7 @@ async function pollEnergy() {
   if (!d.ok) return;
   energyCache = d;
   if (!d.enabled) { $('emsSub').textContent = 'EMS 未启用'; return; }
-  // 班次3增强：分时电价——显示当前所处档位与单价
+  // 阶段3增强：分时电价——显示当前所处档位与单价
   const tou = (d.tou_enabled && d.period_now)
     ? ` · 现行[${d.period_now.tier}] ${d.period_now.price} 元/kWh` : '';
   $('emsSub').textContent =

@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-vision/vision_upgrade.py —— UnitVision.judge() 覆写/注入入口（班次3新增）
+vision/vision_upgrade.py —— UnitVision.judge() 覆写/注入入口（阶段3新增）
 ==========================================================================
 职责（交付范围1 的落地点）：
     1. VisionAlgorithmV3：训练一次轻量逻辑回归（受控随机样本，种子固定），
        对每件在检品采样多特征观测向量 → 模型推理 → 输出 ("OK"/"NG", dim_mm)；
     2. install_vision_upgrade()：把 UnitVision 实例的 judge() 以【实例级注入】
-       方式替换为升级算法（原类定义零改动，班次1/2 回归路径原样保留）；
-       班次1规则法在注入算法内部并行执行，形成 A/B 对照：
+       方式替换为升级算法（原类定义零改动，阶段1/2 回归路径原样保留）；
+       阶段1规则法在注入算法内部并行执行，形成 A/B 对照：
        - 判定明细写入 unit_vision.last_judge_detail（update() 回填进 qc_records）；
        - 在线混淆矩阵（算法 vs 仿真真值）滚动累计在 unit_vision.ab_stats，
          作为运行期"仿真验证值"指标（Web 端可读）。

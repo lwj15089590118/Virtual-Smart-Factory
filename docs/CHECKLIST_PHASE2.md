@@ -1,4 +1,4 @@
-# 班次2 自检清单（SCADA 监控层 + AGV 物流 + Web 可视化）
+# 阶段2 自检清单（SCADA 监控层 + AGV 物流 + Web 可视化）
 
 > 交付前逐项勾验。所有指标均为**仿真验证值**。
 > 验证环境：Windows 10 + Python 3.12.10 + numpy 2.5 / flask 3.1 / pymodbus 3.6.9
@@ -12,9 +12,9 @@
 - [x] `agv/agv_fleet.py` ≥2 台车、六阶段任务状态机、替换占位调度、出库段运抵出货口
 - [x] `main.py --web` 开关（自动 realtime 长驻）+ AGV 编排接入 + execute_command 命令入口
 - [x] `selftest.py` 新增 B2(Web API 冒烟) / B3(AGV 任务闭环)，合计 11 用例
-- [x] 班次1 文件零重写；改动处均有"班次2修改"注释（settings/event_bus/unit_palletizing/main/selftest）
+- [x] 阶段1 文件零重写；改动处均有"阶段2修改"注释（settings/event_bus/unit_palletizing/main/selftest）
 
-## 二、自动化验证结果（本班次实测）
+## 二、自动化验证结果（本阶段实测）
 
 | 项目 | 命令 | 结果 |
 |---|---|---|
@@ -52,10 +52,10 @@
 3. AGV 直线导航模型（磁条导引简化），速度空满载一致；电量仅装饰性。
 4. 出库演示默认每入库 3 托触发 1 托 FIFO 出库（OUTBOUND_DEMO_EVERY_N，可配 0 关闭）。
 5. Flask 开发服务器满足演示并发；生产化建议换 waitress（README 已注明）。
-6. 班次2 并入 AGV 随机故障后，随机流与班次1略有差异：600s 冒烟产量 15→18 件，
+6. 阶段2 并入 AGV 随机故障后，随机流与阶段1略有差异：600s 冒烟产量 15→18 件，
    各不变量仍全绿（回归口径见 selftest 报告）。
 
-## 六、遗留事项（移交班次3）
+## 六、遗留事项（移交阶段3）
 
 - 视觉 judge() 覆写点、qc_records 字段已就绪（见 HANDOVER_SHIFT3.md）；
 - MES 可直接回放 logs/events_*.jsonl 或订阅事件流；

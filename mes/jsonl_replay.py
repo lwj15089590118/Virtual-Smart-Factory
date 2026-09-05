@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-mes/jsonl_replay.py —— 事件总线 JSONL 回放器（班次3新增）
+mes/jsonl_replay.py —— 事件总线 JSONL 回放器（阶段3新增）
 ==========================================================
 职责（交付范围2 的"数据源=事件总线 JSONL 回放"落地点）：
     1. run_segments(active_path)：按 run 收集**全部**事件段——活动文件 +

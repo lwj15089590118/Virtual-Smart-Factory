@@ -4,14 +4,14 @@ lines/unit_palletizing.py —— 码垛机器人单元
 ============================================
 职责：
     1. 从视觉 OK 品队列逐箱取件，按 3×4×4 垛型码放（X列3 × Y行4 × Z层4 = 48箱/托）；
-    2. 每箱记录垛内网格坐标与毫米物理坐标（班次2 Web 端 ECharts 3D 垛型回放直接可用）；
+    2. 每箱记录垛内网格坐标与毫米物理坐标（阶段2 Web 端 ECharts 3D 垛型回放直接可用）；
     3. 垛满 → 托盘输出（PALLET_OUT_TIME）→ 发出 agv.call 事件呼叫 AGV
-       （班次2 接入真实 AGV 调度；本班次由编排器的占位调度器响应）；
+       （阶段2 接入真实 AGV 调度；本阶段由编排器的占位调度器响应）；
     4. 满托后自动补给新托盘（假设：空托盘供应无限）。
 
 假设记录：
     - 码垛顺序按 层(z) → 行(y) → 列(x) 逐格推进，与常见"逐层码垛"工艺一致；
-    - 空托盘供应无限（真实产线有空托盘缓存输送线，本班次不建模）。
+    - 空托盘供应无限（真实产线有空托盘缓存输送线，本阶段不建模）。
 """
 
 from collections import deque
@@ -89,7 +89,7 @@ class UnitPalletizing(DeviceBase):
         """当前在码托盘号。"""
         return f"PLT{self._pallet_seq:06d}"
 
-    # 班次2修改：新增当前垛公开访问器（Web 3D 垛型面板数据源，避免外部触碰私有字段）
+    # 阶段2修改：新增当前垛公开访问器（Web 3D 垛型面板数据源，避免外部触碰私有字段）
     def current_grid(self) -> List[dict]:
         """导出当前正在码放的垛（已放各箱含毫米坐标），供 Web 端 bar3D 实时渲染。"""
         return [dict(b) for b in self._grid]
@@ -171,7 +171,7 @@ class UnitPalletizing(DeviceBase):
             self._next_slot = 0
 
     def _finish_pallet_out(self) -> None:
-        """满托到达码垛出口：登记档案并呼叫 AGV（班次2 接管点）。"""
+        """满托到达码垛出口：登记档案并呼叫 AGV（阶段2 接管点）。"""
         pallet = self._output_pallet
         self._output_pallet = None
         self._pallet_seq += 1                      # 补给新空托盘（假设无限供应）
@@ -181,7 +181,7 @@ class UnitPalletizing(DeviceBase):
                           "from": f"{self.device_id}-OUT",
                           "to": f"{S.WAREHOUSE_ID}-IN",
                           "box_count": pallet.box_count,
-                          "note": "班次1占位呼叫：班次2由真实AGV调度接管"})
+                          "note": "阶段1占位呼叫：阶段2由真实AGV调度接管"})
 
     # ------------------------------------------------------------------
     # 查询接口

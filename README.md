@@ -5,7 +5,7 @@
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 > 旗舰作品集项目 · 全软件仿真、零硬件依赖 · 所有运行指标均为 **仿真验证值**
-> 分三个班次开发：**班次1 仿真内核与产线层（已完成）** → **班次2 SCADA监控层+AGV物流+Web可视化（已完成）** → **班次3 视觉算法/MES/EMS（已完成）**
+> 分三个阶段开发：**阶段1 仿真内核与产线层（已完成）** → **阶段2 SCADA监控层+AGV物流+Web可视化（已完成）** → **阶段3 视觉算法/MES/EMS（已完成）**
 
 ## ⭐ 项目全貌
 
@@ -19,7 +19,7 @@
 
 *体验方式：`python main.py --web --speed 10` 启动后浏览器打开 <http://127.0.0.1:5080>（WebSocket :5081 实时推送 · Modbus :1502 可连组态软件）*
 
-## 一、班次1 已实现能力
+## 一、阶段1 已实现能力
 
 | 子系统 | 文件 | 能力 |
 |---|---|---|
@@ -28,11 +28,11 @@
 | 设备基类 | `core/device_base.py` | 五态状态机（停止/待机/运行/故障/维护）；DI/DO/AI/AO 点表；运行秒数/循环数/停机原因统计；故障注入接口 |
 | 故障注入器 | `core/fault_injector.py` | 随机故障（泊松率可配）+ 脚本故障（设备/时刻/类型）+ 急停人工复位；全部产生事件 |
 | 装配单元 | `lines/unit_assembly.py` | PLC 顺控 8 步状态机；节拍可配（默认 32s）；安全门开→保持、急停→全线停；有限料仓（料空冻结于等待上料·低水位滞回告警·REST 命令补料续产） |
-| 视觉质检 | `lines/unit_vision.py` | 尺寸规则判定 OK/NG（理论 NG 率≈4.6%）；NG 分流返修道；质检记录输出（班次3 换真算法） |
+| 视觉质检 | `lines/unit_vision.py` | 尺寸规则判定 OK/NG（理论 NG 率≈4.6%）；NG 分流返修道；质检记录输出（阶段3 换真算法） |
 | 码垛单元 | `lines/unit_palletizing.py` | 3×4×4=48 箱/托垛型；毫米坐标随事件输出；垛满→托盘输出→AGV 呼叫事件 |
 | 立体库 | `lines/warehouse.py` | 200 库位表（4排×10列×5层）；出入库队列；堆垛机任务模型；库位回收复用 |
 
-## 二、班次2 新增能力（SCADA 监控层 + AGV 物流 + Web 可视化）
+## 二、阶段2 新增能力（SCADA 监控层 + AGV 物流 + Web 可视化）
 
 | 子系统 | 文件 | 能力 |
 |---|---|---|
@@ -42,18 +42,18 @@
 | AGV 车队 | `agv/agv_fleet.py` | ≥2 台车六阶段任务状态机（空闲→去取货→装载→运输→交货→回位）；入库任务接码垛 agv.call、出库任务接 out_staging 运抵出货口；二维平面位置/里程/电量模型；车辆纳入全线急停与随机故障体系；低电量自动回充排程（<25% 触发·单工位互斥·充至 70% 返岗·任务优先不中断） |
 | 监控大屏 | `web/static/*` | ECharts(本地 vendor 优先 + CDN 多源回退)：工厂流程图(状态色块)、产量趋势、NG率仪表盘、垛型三视图(等距自绘/真3D/俯视)、库位热力图、AGV 物流地图、实时事件滚动表、设备一览；按钮：启动/暂停/急停/复位/开关安全门/手动出库/调倍率 |
 
-## 三、班次3 新增能力（视觉算法 + MES 制造执行 + EMS 能源/健康管理）
+## 三、阶段3 新增能力（视觉算法 + MES 制造执行 + EMS 能源/健康管理）
 
 | 子系统 | 文件 | 能力 |
 |---|---|---|
 | 多特征测量模型 | `vision/measure_model.py` | 单尺寸高斯抽样升级为 4 维观测向量（尺寸偏差/圆度/表面得分/边缘锐度，含测量噪声）；真值口径 NG = 尺寸超差(≈4.6%) ∪ 公差带内隐性缺陷(≈2.5%) ≈ **7%**，隐性缺陷（表面划痕/边缘崩缺/装配错位）只有多特征算法能识别 |
 | 轻量分类器 | `vision/classifiers.py` | 全部 numpy 手写：健康基线异常得分变换器（SPC 控制限思想）/ 逻辑回归（批量GD+L2，在线主模型）/ 单类马氏距离（Hotelling T² 思想，A/B 对照第二算法）；参数支持导出回载 |
 | 样本与评估 | `vision/defect_generator.py` | 受控随机生成带真值缺陷样本集（种子固定可复现）；混淆矩阵/准确率/查准/查全/F1 计算；规则法 vs 逻辑回归 vs 马氏三方 A/B 对照流水线（独立测试集口径） |
-| 判定算法注入 | `vision/vision_upgrade.py` | 实例级覆写 `UnitVision.judge()`（原类零改动，班次1/2 回归路径保留）；判定明细（P(NG)/特征向量/与规则法对照结论）随质检记录落盘；在线混淆矩阵滚动累计；`--rule-vision` 一键退回规则法对照 |
+| 判定算法注入 | `vision/vision_upgrade.py` | 实例级覆写 `UnitVision.judge()`（原类零改动，阶段1/2 回归路径保留）；判定明细（P(NG)/特征向量/与规则法对照结论）随质检记录落盘；在线混淆矩阵滚动累计；`--rule-vision` 一键退回规则法对照 |
 | MES 引擎 | `mes/mes_engine.py` | 订阅总线通配符 "*" 自动报工；OEE ≈ 可用率×性能率×良品率（装配单元近似口径）；工单满单自动关单翻单；产品↔托盘↔批次↔工单四级追溯反查；Web 命令按指定数量开单（插单优先投产） |
 | 订单/追溯模型 | `mes/order_model.py` | WorkOrder/Batch 数据模型 + TraceabilityIndex 追溯索引（正查/反查、托盘库位流转历史、QC 档案、容量上限防长跑爆内存） |
-| JSONL 回放 | `mes/jsonl_replay.py` | 离线回放一个 run 的**全部事件段**（活动文件+轮转历史段 `.1~.N`，段缺失/损坏显著告警不静默跳过）重建完整 MES 台账，并输出"回放总数 vs 各段行数合计"对账（与在线台账一致性+逐条对账已入自检 C2，跨轮转不再丢段——第四轮修补）；CLI 直接输出报工报表 |
-| SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库；保留策略 `tools/db_prune.py`（活数据超 `--max-mb` 按最旧 run 分批清理+VACUUM，至少保最新批次——第四轮修补） |
+| JSONL 回放 | `mes/jsonl_replay.py` | 离线回放一个 run 的**全部事件段**（活动文件+轮转历史段 `.1~.N`，段缺失/损坏显著告警不静默跳过）重建完整 MES 台账，并输出"回放总数 vs 各段行数合计"对账（与在线台账一致性+逐条对账已入自检 C2，跨轮转不再丢段）；CLI 直接输出报工报表 |
+| SQLite 台账落库 | `mes/sqlite_ledger.py` | 标准库 sqlite3 零新增依赖：orders 工单档案（(run_id, wo_id) 联合主键 UPSERT，跨运行累积可对比）+ qc_log 判定流水（每件一行，含归属工单号与算法明细）；WAL 读写互不阻塞、落库异常只降级不拖垮仿真；`MES_SQLITE_ENABLE` 可关，离线回放不落库；保留策略 `tools/db_prune.py`（活数据超 `--max-mb` 按最旧 run 分批清理+VACUUM，至少保最新批次） |
 | 能耗模型 | `ems/energy_model.py` | 订阅 device.state 按【状态→功率kW】曲线分段积分 kWh（未闭合段快照时虚拟结算）；电费按尖峰平谷分时电价（谷0.35/平0.65/峰1.05 元/kWh，可配/可关）跨档自动切分子段计价并输出分档台账，另折算 CO₂，全部为仿真验证值 |
 | 健康监视 | `ems/health_monitor.py` | 滚动窗口提取 故障次数/停机占比/平均恢复时长/启停切换 → 扣分制 0~100 健康分 + 四级维护建议；跌破阈值发 `ems.health_alert`（滞回防抖）；`ems_maintain / ems_maintain_done` 维护命令闭环（触发 `DeviceBase.enter_maintenance()` 预留接口） |
 | 大屏扩展 | `web/static/*`、`scada/web_server.py` | REST 新增 `/api/mes/orders /api/mes/batches /api/mes/trace /api/mes/qc_log /api/ems/energy /api/ems/health`（qc_log 为 SQLite 台账判定流水查询，支持 limit/result/wo_id/product_id/run_id 组合过滤）；面板⑨ MES 工单与追溯（支持产品号/托盘号查询 + qc_log 判定流水小表，可按 OK/NG 过滤、点击流水行自动填入追溯框）、面板⑩ 能耗·设备健康度 |
@@ -77,14 +77,14 @@ pytest                               # 全量 21 用例（selftest 17 转接 + S
 # 回放总数 vs 各段行数合计；段缺失/损坏显著告警），输出 MES 报工报表
 python mes/jsonl_replay.py
 
-# mes.db 保留策略（第四轮修补）：活数据超过上限按最旧 run 分批清理+VACUUM，
+# mes.db 保留策略：活数据超过上限按最旧 run 分批清理+VACUUM，
 # 至少保留最新批次；先 --dry-run 预览清理计划
 python tools/db_prune.py --max-mb 200 --dry-run
 python tools/db_prune.py --max-mb 200
 
-# ★ 班次2 一键演示：实时模式 + 监控大屏(http://127.0.0.1:5080)
+# ★ 阶段2 一键演示：实时模式 + 监控大屏(http://127.0.0.1:5080)
 #   + WebSocket(5081) + Modbus TCP 从站(1502)，Ctrl+C 优雅停机
-#   网络安全默认（审查修复）：HTTP/WS/Modbus 三协议只绑定本机 127.0.0.1；
+#   网络安全默认：HTTP/WS/Modbus 三协议只绑定本机 127.0.0.1；
 #   /api/command 未配置口令时仅接受本机请求（配置 SCADA_API_TOKEN 后请求
 #   携带 X-Auth-Token 头即可，大屏会自动提示输入一次并记忆）；Modbus 默认只读
 python main.py --web --speed 10
@@ -93,7 +93,7 @@ python main.py --web --speed 10
 python main.py --web --speed 10 --host 0.0.0.0 --allow-write
 #   --host 0.0.0.0   开放 HTTP/WS/Modbus 至局域网
 #   --allow-write    允许 Modbus DO/AO 写回设备（默认只读）
-#   ※ 复审修补：绑定非回环地址且未配置口令时，WS 事件流与只读 API 对局域网
+#   ※ 安全提示：绑定非回环地址且未配置口令时，WS 事件流与只读 API 对局域网
 #     匿名可读，启动日志会显著警告——仅限隔离演示网络；
 #     配置口令后（见下）GET/WS 读取面一并要求鉴权，全接口闭环。
 
@@ -113,8 +113,8 @@ python soak_run.py --days 30 --sample-min 60
 #   --duration 秒      仿真时长（普通模式默认600，--web 默认不限时）
 #   --seed N           随机种子（结果可复现）
 #   --no-random-faults 关闭随机故障（脚本故障保留）
-#   --no-agv           关闭车队退回班次1占位搬运（回归对照用）
-#   --rule-vision      关闭班次3视觉算法注入（退回班次1规则法，A/B 回归对照用）
+#   --no-agv           关闭车队退回阶段1占位搬运（回归对照用）
+#   --rule-vision      关闭阶段3视觉算法注入（退回阶段1规则法，A/B 回归对照用）
 
 # 命令口令（可选）：设置后 POST /api/command 必须携带 X-Auth-Token 头；
 # 绑定非回环地址(--host 0.0.0.0 等)时 GET/WS 读取面同样要求鉴权（全接口闭环）
@@ -138,41 +138,41 @@ Virtual-Smart-Factory/
 ├─ requirements-dev.txt       开发期依赖（pytest/pytest-cov/ruff，不进运行时依赖）【增强新增】
 ├─ tests/
 │  ├─ test_plant_selftest.py  pytest 薄壳（参数化转接 selftest 17 用例，smoke 标记）【增强新增】
-│  └─ test_scada_network.py   SCADA 真实网络链路冒烟（WS 全链路+WS 握手鉴权+Modbus 读写回+Web 读面鉴权/桥接器凭证头，真实起停本地端口）【审查修复新增·复审修补扩充】
+│  └─ test_scada_network.py   SCADA 真实网络链路冒烟（WS 全链路+WS 握手鉴权+Modbus 读写回+Web 读面鉴权/桥接器凭证头，真实起停本地端口）【网络安全加固新增】
 ├─ requirements.txt
 ├─ config/settings.py         全局参数中心（节拍/垛型/库型/故障率/AGV站点/端口/趋势桶）
 ├─ core/
 │  ├─ sim_clock.py            仿真时钟引擎
-│  ├─ event_bus.py            事件总线 + JSONL 持久化（班次2追加 agv.task_* / ui.command 事件）
+│  ├─ event_bus.py            事件总线 + JSONL 持久化（阶段2追加 agv.task_* / ui.command 事件）
 │  ├─ device_base.py          设备基类（状态机/IO点表/统计/故障接口）
 │  └─ fault_injector.py       故障注入器
 ├─ lines/
 │  ├─ product.py              产品/托盘数据结构
 │  ├─ unit_assembly.py        装配单元（8步顺控+双联锁）
 │  ├─ unit_vision.py          视觉质检单元
-│  ├─ unit_palletizing.py     码垛机器人单元（班次2加 current_grid() 访问器）
+│  ├─ unit_palletizing.py     码垛机器人单元（阶段2加 current_grid() 访问器）
 │  └─ warehouse.py            立体库简化模型
-├─ agv/                       【班次2新增】
+├─ agv/                       【阶段2新增】
 │  └─ agv_fleet.py            AGV 车队（六阶段任务状态机 + 调度器 + 平面位置模型）
-├─ scada/                     【班次2新增】
+├─ scada/                     【阶段2新增】
 │  ├─ ws_hub.py               标准库 RFC6455 WebSocket 推送网关
-│  ├─ web_server.py           Flask REST + WS 订阅推送 + KPI 趋势聚合（班次3追加 /api/mes/* /api/ems/*）
+│  ├─ web_server.py           Flask REST + WS 订阅推送 + KPI 趋势聚合（阶段3追加 /api/mes/* /api/ems/*）
 │  └─ modbus_server.py        pymodbus TCP 从站（io_table→保持寄存器映射）
-├─ vision/                    【班次3新增】视觉算法升级包
+├─ vision/                    【阶段3新增】视觉算法升级包
 │  ├─ measure_model.py        多特征测量仿真模型（4维观测+测量噪声+隐性缺陷真值口径）
 │  ├─ classifiers.py          numpy 手写轻量分类器（异常变换器/逻辑回归/单类马氏）
 │  ├─ defect_generator.py     缺陷样本生成器 + 混淆矩阵指标计算 + 三方A/B评估
 │  └─ vision_upgrade.py       UnitVision.judge() 实例级注入入口（保留规则法A/B对照）
-├─ mes/                       【班次3新增】制造执行系统
+├─ mes/                       【阶段3新增】制造执行系统
 │  ├─ order_model.py          工单/批次数据模型 + 产品→托盘→批次→工单追溯索引
 │  ├─ mes_engine.py           MES 引擎（事件驱动自动报工/OEE近似/四级追溯反查）
 │  ├─ sqlite_ledger.py        MES 台账 SQLite 落库（orders/qc_log 两表 + /api/mes/qc_log 查询）
 │  └─ jsonl_replay.py         JSONL 回放器（离线重建 MES 台账 + CLI 报告）
-├─ ems/                       【班次3新增】能源与健康管理
+├─ ems/                       【阶段3新增】能源与健康管理
 │  ├─ energy_model.py         设备能耗模型（状态功率曲线分段积分 → kWh/电费/CO₂）
 │  └─ health_monitor.py       设备健康评分（滚动窗口特征 → 0~100分 + 维护建议 + 告警）
-├─ web/static/                【班次2新增·班次3扩展】监控大屏（index.html + app.js + style.css，
-│                             ECharts 本地vendor优先+CDN回退；班次3追加面板⑨ MES工单追溯、
+├─ web/static/                【阶段2新增·阶段3扩展】监控大屏（index.html + app.js + style.css，
+│                             ECharts 本地vendor优先+CDN回退；阶段3追加面板⑨ MES工单追溯、
 │                             面板⑩ 能耗·健康度；垛型三视图等距自绘/真3D/俯视可切换）
 │  └─ vendor/                 内置 echarts@5.2.2 / echarts-gl@2.0.9（同源首选加载，
 │                             规避浏览器跟踪防护拦截与断网场景）【验收期新增】
@@ -180,15 +180,13 @@ Virtual-Smart-Factory/
 │                             --token/SCADA_API_TOKEN 随 X-Auth-Token 头携带，
 │                             配合 docs/TUTORIAL_MCGS_OPENPLC.md 实现梯形图闭环）【增强新增】
 ├─ docs/
-│  ├─ HANDOVER_SHIFT2.md      班次2交接Prompt模板（存档）
-│  ├─ HANDOVER_SHIFT3.md      班次3交接Prompt模板（存档）
-│  ├─ CHECKLIST_SHIFT1.md     班次1自检清单
-│  ├─ CHECKLIST_SHIFT2.md     班次2自检清单【班次2产出】
-│  ├─ CHECKLIST_SHIFT3.md     班次3自检清单【班次3产出】
+│  ├─ CHECKLIST_PHASE1.md     阶段1自检清单
+│  ├─ CHECKLIST_PHASE2.md     阶段2自检清单【阶段2产出】
+│  ├─ CHECKLIST_PHASE3.md     阶段3自检清单【阶段3产出】
 │  ├─ INTERVIEW.md            面试弹药库（概念映射三菱/西门子/MCGS + 王牌排障案例）【增强新增】
 │  ├─ DEVELOPMENT.md          开发指南（命令速查/三层测试体系/覆盖率快照）【增强新增】
 │  └─ TUTORIAL_MCGS_OPENPLC.md 组态联动实战教程：MCGS触屏+OpenPLC梯形图接入虚拟产线【增强新增】
-├─ tools/                     【第四轮修补新增】运维小工具
+├─ tools/                     运维小工具
 │  └─ db_prune.py             mes.db 保留策略（活数据超上限按最旧 run 分批清理+VACUUM，--dry-run 预览）
 ├─ logs/                      运行期生成：events_*.jsonl 事件流（含轮转历史段 .1~.N）
 └─ reports/                   运行期生成：selftest_report_*.txt 自检报告
@@ -201,19 +199,19 @@ Virtual-Smart-Factory/
 - 码垛能力 **48 箱/托**（3×4×4），单箱码放 1.2s
 - 立体库容量 **200 托**（4×10×5），堆垛机单任务 25s
 - AGV 车速 **1.5 m/s**，装/卸各 4s，2 台车；满托端到端入库（码垛出口→上架）约 **65s**
-- 视觉算法 A/B 对照（训练1500件/独立测试2000件）：逻辑回归 **准确率98.95% / 查全84.8%**，对比班次1规则法 **97.45% / 64.0%**（数据源：`reports/selftest_report_20260825_145533.txt`；F1 等派生指标由 `vision/defect_generator.metrics` 按混淆矩阵推算）；查全率 64%→84.8% 来自"健康基线异常特征"工程；600s 联跑在线混淆矩阵账目自洽
+- 视觉算法 A/B 对照（训练1500件/独立测试2000件）：逻辑回归 **准确率98.95% / 查全84.8%**，对比阶段1规则法 **97.45% / 64.0%**（数据源：`reports/selftest_report_20260825_145533.txt`；F1 等派生指标由 `vision/defect_generator.metrics` 按混淆矩阵推算）；查全率 64%→84.8% 来自"健康基线异常特征"工程；600s 联跑在线混淆矩阵账目自洽
 - MES：工单→批次→托盘→产品 四级追溯全链路闭环（可反查库位与流转历史）；48件直灌+装配并行产出用例报工 OK54/NG2，良率 **96.4%**，OEE≈**90.0%**（A×P×Q 近似口径）；JSONL 回放重建台账与在线完全一致
 - MES 指定数量订单：Web 命令按任意计划量开单并**插单优先投产**——C4 用例 50 件工单从 REST 开单 → 满单 50 件自动关单（审计落盘）→ 自动翻单开新单全生命周期闭环，期间旧工单零污染
 - EMS 能耗：功率曲线分段积分精确（60s×12kW=0.200kWh，误差<0.01）；电费按尖峰平谷分时计价（谷0.35/平0.65/峰1.05 元/kWh），状态段跨档自动切分，分档电费合计=总电费；CO₂ 按 0.5568 kg/kWh 折算
 - EMS 健康：无故障期评分 ≥98 → 全线急停40s 后 89.5 → 连续故障 46.5（跌破告警线60自动发 `ems.health_alert` 并给出维护建议）；`ems_maintain` 维护命令进出闭环
-- 600s 加速联跑产量 **15~18 件**（含注入故障影响；班次3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现班次1/2 口径；数据源：`reports/selftest_report_20260825_145533.txt`）
+- 600s 加速联跑产量 **15~18 件**（含注入故障影响；阶段3实测 18件 OK17/NG1、NG率5.6%——升级算法把隐性缺陷纳入 NG 口径所致，加 `--rule-vision` 可复现阶段1/2 口径；数据源：`reports/selftest_report_20260825_145533.txt`）
 - 自检 **17/17 通过**（A1~A9 模块级含有限料仓 + B2 Web 冒烟 + B3 AGV 闭环 + B4 回充排程 + C1~C4 算法/MES/EMS/订单全生命周期 + B1 联跑）
 - 长程稳定性压测（`soak_run.py`，30 个仿真日 = 2592 万拍，墙钟约 9 分钟）：流出 **79960 件**、满托 1572 托、NG 率稳定 5.6%；内存净增 **+25.7MB（斜率 ≈+0.9 MB/仿真日）**；质检记录环(1万)/AGV完成档(500)/追溯索引(2万) 三大防膨胀机制全部到顶平稳（追溯超限按设计丢弃 11.65 万键）；全程托盘守恒与故障账目（2756 次注入全配对）分毫不差（数据源：`reports/soak_report_soak30d_v3.txt`）
 - 工程质量：ruff 静态检查零告警；pytest 全量用例（薄壳转接 selftest 17 例 + SCADA 真实网络链路冒烟 4 例，含 600s 冒烟）秒级通过；核心产线/调度层覆盖率 74~84%（总体 65%）
 
-## 七、后续班次挂接点速查
+## 七、后续阶段挂接点速查
 
-| 班次 | 挂接点 | 位置 |
+| 阶段 | 挂接点 | 位置 |
 |---|---|---|
 | 2✔ | SCADA Web 服务（REST/WebSocket） | `scada/web_server.py`，端口 `settings.SCADA_HTTP_PORT/SCADA_WS_PORT` |
 | 2✔ | Modbus TCP 从站 | `scada/modbus_server.py`，端口 `MODBUS_TCP_PORT`，映射表 `/api/modbus/map` |
@@ -222,6 +220,34 @@ Virtual-Smart-Factory/
 | 3✔ | MES 报工 | `mes/mes_engine.py`（订阅 "*" 自动报工/追溯）；离线分析 `python mes/jsonl_replay.py` |
 | 3✔ | EMS/健康模块 | `ems/energy_model.py`（能耗积分）+ `ems/health_monitor.py`（健康评分/告警/维护接口已启用） |
 
-## 八、许可证
+## 八、FAQ
+
+**Q1：全软件仿真，和真实工厂的差距在哪？**
+如实回答：仿真强在逻辑与数据链路的完整、可复现、可加速（30 个仿真日压测 9 分钟跑完），弱在真实设备的噪声特性、通信抖动、安全回路与现场干扰——这些只能在真机上验证。本项目的定位是把"产线逻辑如何被 SCADA 读写、MES 如何追溯、EMS 如何计费"这条数据链完整走通，控制思想与接口协议（Modbus TCP）与真实系统一致，可对接组态软件（见 Q3）。
+
+**Q2：为什么 WebSocket 网关用标准库手写而不用 Socket.IO / Flask-SocketIO？**
+两个原因：① 零依赖可运行是本项目的硬约束之一（运行时依赖仅 numpy/flask/pymodbus），手写 RFC6455（握手/帧解析/PingPong/Close、有界发送队列、慢客户端丢帧不阻塞仿真）不引入任何新依赖；② 完整实现一遍协议是理解 WS 生命周期最扎实的方式，面试中被追问帧格式、掩码、关闭握手时每一步都有代码可指。
+
+**Q3：能对接真实组态软件 / 上位机吗？**
+能。Modbus TCP 从站（:1502）把全部设备点表映射为保持寄存器，寄存器映射表可经 `/api/modbus/map` 导出；`docs/TUTORIAL_MCGS_OPENPLC.md` 是一篇完整的 MCGS 触屏 + OpenPLC 梯形图接入虚拟产线的实战教程（含补料闭环桥接器 plc_refill_bridge.py），任何支持 Modbus 的组态/上位软件均可按映射表接入。
+
+**Q4：README 里的数字怎么来的？可复现吗？**
+全部数字标注数据源报告文件（reports/ 目录）：`python selftest.py` 一键跑 17 项全厂自检并生成报告；`python soak_run.py --days 30` 复现 30 仿真日压测；600s 联跑、视觉 A/B 对照等均由固定种子驱动，同种子结果一致。
+
+**Q5：网络安全默认是怎么设的？**
+HTTP/WS/Modbus 三协议默认只绑定 127.0.0.1；Modbus 默认只读（--allow-write 显式开放写）；命令口令可选（配置 SCADA_API_TOKEN 后全接口要求 X-Auth-Token，常数时间比较）；绑定非回环地址且未配置口令时启动日志显著警告。
+
+**Q6：这个项目和作品集里其他 12 个项目是什么关系？**
+旗舰与整合关系：其他项目分别深入单点能力（PLC/机器人联调、PID 整定、AGV 调度、视觉检测、云边协同、数字孪生等），本项目把这些能力整合进一条完整产线数据链——从设备层事件总线到 SCADA、AGV 物流、视觉判定、MES 追溯、EMS 能效的端到端闭环。
+
+## 九、Roadmap（如实列示，均为尚未实现）
+
+- [ ] 多车调度升级：AGV 车队当前为任务级派单+回充排程，规划引入时间窗路径预留与拥堵协商（扩展点已在 `AGVFleet.update()` 预留）；
+- [ ] 视觉深度模型可选包：当前为规则法 + numpy 手写逻辑回归/马氏基线，规划提供 ONNX 推理可选接入（保持 --rule-vision 同款 A/B 对照框架）；
+- [ ] MES 对外集成接口：当前台账为 SQLite + Web 查询，规划增加 REST/MQTT 报工推送以便对接外部 MES/ERP；
+- [ ] 容器化部署：提供 Dockerfile + docker-compose 一键起全栈（含大屏与 Modbus 端口声明）；
+- [ ] 大屏英文界面：当前中文，规划 i18n。
+
+## 十、许可证
 
 本项目基于 [MIT License](LICENSE) 开源，可自由用于学习、教学与二次开发。

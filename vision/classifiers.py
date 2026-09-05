@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-vision/classifiers.py —— numpy 手写轻量分类器（班次3新增）
+vision/classifiers.py —— numpy 手写轻量分类器（阶段3新增）
 ============================================================
 提供三种不依赖任何深度学习框架的算法（硬性要求④）：
     1. AnomalyTransformer 异常得分变换器：
@@ -101,7 +101,7 @@ class LogisticRegressionLite:
 
     def __init__(self, lr: float = None, epochs: int = None,
                  l2: float = 1e-4, threshold: float = 0.5):
-        # 假设记录：默认超参取自参数中心（班次3配置段），统一调参入口
+        # 假设记录：默认超参取自参数中心（阶段3配置段），统一调参入口
         from config import settings as _S
         self.lr = float(lr if lr is not None else _S.VISION_LR_RATE)
         self.epochs = int(epochs if epochs is not None else _S.VISION_LR_EPOCHS)

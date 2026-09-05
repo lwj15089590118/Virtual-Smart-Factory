@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-scada/modbus_server.py —— Modbus TCP 从站（pymodbus，班次2 交付项2）
+scada/modbus_server.py —— Modbus TCP 从站（pymodbus，阶段2 交付项2）
 =====================================================================
 职责：
     把 Plant.devices[*].io_table（DI/DO/AI/AO 点表）映射为保持寄存器区，

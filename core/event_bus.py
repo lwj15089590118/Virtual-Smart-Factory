@@ -4,16 +4,16 @@ core/event_bus.py —— 全厂事件总线（发布/订阅 + JSONL 追加持久
 ==================================================================
 设计要点：
     1. 进程内同步发布/订阅：publish() 按主题分发给订阅者，异常互相隔离；
-    2. 每条事件以一行 JSON 追加写入 logs/events_*.jsonl —— 这是后续班次
+    2. 每条事件以一行 JSON 追加写入 logs/events_*.jsonl —— 这是后续阶段
        SCADA 历史库、MES 报工、健康模块特征提取的统一数据入口；
     3. 支持精确主题与通配符 "*" 订阅；提供 recent()/replay() 查询接口，
-       班次2 的 Web 端将直接复用。
+       阶段2 的 Web 端将直接复用。
 事件结构（统一 schema，全部可 JSON 序列化）：
     {"seq": int, "ts_sim": float, "ts_wall": str, "source": str,
      "type": str, "severity": str, "data": dict}
 
 假设记录：
-    - 本班次单进程内存总线即可满足吞吐；班次2 如需跨进程，可在本类外再包一层。
+    - 本阶段单进程内存总线即可满足吞吐；阶段2 如需跨进程，可在本类外再包一层。
 """
 
 import json
@@ -25,7 +25,7 @@ from typing import Callable, Dict, List, Optional
 
 
 class EventTypes:
-    """全厂统一事件类型常量（后续班次只允许在此追加，禁止散落字符串）。"""
+    """全厂统一事件类型常量（后续阶段只允许在此追加，禁止散落字符串）。"""
     DEVICE_STATE = "device.state"          # 设备状态迁移
     FAULT_RAISED = "fault.raised"          # 故障产生（随机/脚本/联锁/人工）
     FAULT_CLEARED = "fault.cleared"        # 故障清除/复位
@@ -34,20 +34,20 @@ class EventTypes:
     VISION_NG = "vision.ng"                # 质检判定 NG（分流返修）
     BOX_PLACED = "pallet.box_placed"       # 码垛机放置一箱（含垛内坐标）
     PALLET_FULL = "pallet.full"            # 托盘垛满 3×4×4
-    AGV_CALL = "agv.call"                  # AGV 呼叫（班次2 接管）
+    AGV_CALL = "agv.call"                  # AGV 呼叫（阶段2 接管）
     WH_INBOUND_DONE = "wh.inbound_done"    # 立体库入库完成
     WH_OUTBOUND_DONE = "wh.outbound_done"  # 立体库出库完成
-    CLOCK_PAUSE = "clock.pause"            # 时钟暂停（预留班次2 UI）
+    CLOCK_PAUSE = "clock.pause"            # 时钟暂停（预留阶段2 UI）
     CLOCK_RESUME = "clock.resume"          # 时钟恢复
     DOOR_HOLD = "assembly.door_hold"       # 安全门开 → 装配单元顺控保持
     DOOR_RESUME = "assembly.door_resume"   # 安全门关 → 顺控恢复
-    # ---- 班次2修改：追加 AGV 车队任务事件（只允许在此处扩展事件类型）----
+    # ---- 阶段2修改：追加 AGV 车队任务事件（只允许在此处扩展事件类型）----
     AGV_TASK_CREATED = "agv.task_created"  # AGV 任务建档（入库/出库）
     AGV_PHASE = "agv.phase"                # AGV 任务阶段迁移（空闲→去取货→装载→运输→交货→回位）
     AGV_TASK_DONE = "agv.task_done"        # AGV 任务闭环完成（入库交付库口/出库送达出货口）
-    UI_COMMAND = "ui.command"              # 班次2：Web 大屏按钮命令审计（REST→Plant）
+    UI_COMMAND = "ui.command"              # 阶段2：Web 大屏按钮命令审计（REST→Plant）
 
-    # ---- 班次3修改：追加 MES / EMS 事件类型（仍遵守"只在此处扩展"的约定）----
+    # ---- 阶段3修改：追加 MES / EMS 事件类型（仍遵守"只在此处扩展"的约定）----
     MES_ORDER_CREATED = "mes.order_created"  # 工单开立（含计划量，MES 报工数据源之一）
     MES_ORDER_CLOSED = "mes.order_closed"    # 工单满单关闭（自动翻单前落一条审计）
     EMS_HEALTH_ALERT = "ems.health_alert"    # 健康分跌破阈值告警（含评分与维护建议）
@@ -94,7 +94,7 @@ class EventBus:
             os.makedirs(log_dir, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             self._log_path = os.path.join(log_dir, f"events_{stamp}.jsonl")
-            # 班次2修改：自检B2/B3/冒烟会在同一秒内连续创建多个总线实例，
+            # 阶段2修改：自检B2/B3/冒烟会在同一秒内连续创建多个总线实例，
             # 追加模式会撞名混写——存在同名文件时追加序号后缀，保证实例独占文件。
             _n = 1
             while os.path.exists(self._log_path):
@@ -215,7 +215,7 @@ class EventBus:
                   f"{exc.__class__.__name__}: {exc}")
 
     # ------------------------------------------------------------------
-    # 查询接口（班次2 Web/API 直接复用）
+    # 查询接口（阶段2 Web/API 直接复用）
     # ------------------------------------------------------------------
     def recent(self, n: int = 50, etype: Optional[str] = None) -> List[dict]:
         """取最近 n 条事件（可按类型过滤），供控制台/UI 展示。

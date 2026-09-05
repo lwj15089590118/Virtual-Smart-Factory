@@ -7,7 +7,7 @@ core/fault_injector.py —— 故障注入器（随机故障 + 脚本故障 + �
        到达恢复时长后自动 clear_fault；
     2. 脚本故障：按预设表 {at 仿真时刻, target 设备, type 类型, duration} 精确触发，
        duration=None 表示需人工复位（如急停）——用于复现特定工况做作品集演示；
-    3. 人工/程序触发：trigger() 接口，供 main.py 联锁急停、班次2 Web 按钮调用。
+    3. 人工/程序触发：trigger() 接口，供 main.py 联锁急停、阶段2 Web 按钮调用。
 
 假设记录：
     - 泊松过程用逐 tick 伯努利近似（dt=0.1s 时误差可忽略），避免引入事件队列复杂度。

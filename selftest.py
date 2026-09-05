@@ -7,7 +7,7 @@ selftest.py —— 全厂自检（逐模块自检 + 10 分钟加速联跑冒烟�
        （每项调用公开接口做行为断言，与各模块内置 __main__ 自检互补）；
     B. 系统级冒烟：用与 main.py 完全相同的 Plant 编排，fast 模式加速联跑
        600 仿真秒（=10 分钟），校验端到端物流守恒、事件落盘完整性；
-    C. 班次3修改：新增 C 组用例——视觉算法指标达标(C1) / MES 追溯闭环(C2) /
+    C. 阶段3修改：新增 C 组用例——视觉算法指标达标(C1) / MES 追溯闭环(C2) /
        EMS 能耗与评分合理性(C3，电费为分时口径) / 指定数量订单全生命周期(C4)；
     D. 输出自检报告到 reports/selftest_report_*.txt 并打印结论。
 
@@ -279,7 +279,7 @@ def case_palletizing_pattern() -> str:
     coords = {(b["x"], b["y"], b["z"]) for b in pal.pallets_done[0]["boxes"]}
     assert len(coords) == cap, "垛内格坐标重复"
     assert max(z for _, _, z in coords) == 3          # 4层
-    # BOX_PLACED 事件携带毫米坐标（班次2 ECharts 3D 数据源）
+    # BOX_PLACED 事件携带毫米坐标（阶段2 ECharts 3D 数据源）
     b0 = boxes_ev[0]
     assert {"px_mm", "py_mm", "pz_mm"} <= set(b0)
     return (f"满托{cap}箱, AGV呼叫1次, 垛型坐标{len(coords)}格唯一, "
@@ -363,7 +363,7 @@ def case_finite_feeder() -> str:
 
 
 # ======================================================================
-# B. 班次2 新增用例：Web API 冒烟（B2）/ AGV 任务闭环（B3）
+# B. 阶段2 新增用例：Web API 冒烟（B2）/ AGV 任务闭环（B3）
 # ======================================================================
 def case_web_api() -> str:
     """B2 Web API 冒烟：Flask test_client 全端点 + 命令链路 + Modbus 映射。
@@ -462,7 +462,7 @@ def case_agv_loop() -> str:
     assert plant.agv_fleet.shipped_count == 1, \
         f"应有1托运抵出货口: {plant.agv_fleet.shipped_count}"
 
-    # ---- 断言5：托盘守恒（班次2权威口径）----
+    # ---- 断言5：托盘守恒（阶段2权威口径）----
     lhs = plant.palletizer.snapshot()["pallets_done"]
     bal = plant.pallet_balance()
     assert lhs == sum(bal.values()), f"守恒失败: {lhs} vs {bal}"
@@ -523,7 +523,7 @@ def case_agv_recharge() -> str:
 
 
 # ======================================================================
-# C. 班次3修改：新增用例 C1 视觉算法指标 / C2 MES 追溯闭环 / C3 EMS 合理性
+# C. 阶段3修改：新增用例 C1 视觉算法指标 / C2 MES 追溯闭环 / C3 EMS 合理性
 # ======================================================================
 def case_vision_algo() -> str:
     """C1 视觉算法指标达标：三方 A/B 对照达标 + judge 注入后在线混淆矩阵自洽。"""
@@ -606,7 +606,7 @@ def case_mes_trace() -> str:
     tp = plant.mes.trace(pid)
     assert tp["kind"] == "产品" and tp["chain"]["pallet_id"] == pallet_id \
         and tp["chain"]["wo_id"] == wo0.wo_id
-    # ---- 断言4：REST 命令模式手动开单（照抄班次2分发+审计，走 test_client 全链路）----
+    # ---- 断言4：REST 命令模式手动开单（照抄阶段2分发+审计，走 test_client 全链路）----
     from scada.web_server import ScadaWebServer
     srv = ScadaWebServer(plant)
     client = srv.app.test_client()
@@ -816,7 +816,7 @@ def case_mes_order_lifecycle() -> str:
 
 
 # ======================================================================
-# B1. 系统级冒烟：600 仿真秒加速联跑（与 main.py 同一编排路径，班次2延续）
+# B1. 系统级冒烟：600 仿真秒加速联跑（与 main.py 同一编排路径，阶段2延续）
 # ======================================================================
 def smoke_full_plant(duration: float = S.DEFAULT_RUN_SECONDS) -> str:
     plant = Plant(speed=S.DEFAULT_SPEED, mode="fast",
@@ -850,7 +850,7 @@ def smoke_full_plant(duration: float = S.DEFAULT_RUN_SECONDS) -> str:
     # 返修道 = NG 总数
     assert v["rework_len"] == v["ng"]
 
-    # ---- 不变量4：托盘守恒（班次2修改：改用 Plant.pallet_balance() 权威分解，
+    # ---- 不变量4：托盘守恒（阶段2修改：改用 Plant.pallet_balance() 权威分解，
     #      口径 = 在库+入库队列+AGV入库在途+出库暂存+AGV出库在途+已出厂）----
     lhs = p["pallets_done"]
     bal = plant.pallet_balance()
@@ -894,14 +894,14 @@ def write_report(smoke_detail: str, report_path: str) -> None:
     total = len(RESULTS)
     lines = [
         "=" * 78,
-        "Virtual-Smart-Factory 班次3 全厂自检报告（含C组用例 C1~C4）",
+        "Virtual-Smart-Factory 阶段3 全厂自检报告（含C组用例 C1~C4）",
         f"生成时间: {datetime.now().isoformat(timespec='seconds')}",
         f"环境: Python {sys.version.split()[0]} @ Windows | "
-        f"依赖: numpy/flask/pymodbus(标准库+numpy+flask+pymodbus 本班次实际使用)",
+        f"依赖: numpy/flask/pymodbus(标准库+numpy+flask+pymodbus 本阶段实际使用)",
         f"配置: dt={S.SIM_DT}s | 默认倍率{S.DEFAULT_SPEED}x | 种子{S.DEFAULT_SEED}"
         f" | AGV车队{S.AGV_COUNT}台 | SCADA:{S.SCADA_HTTP_PORT}/WS:{S.SCADA_WS_PORT}"
         f"/Modbus:{S.MODBUS_TCP_PORT}",
-        f"班次3扩展: 视觉算法{'启用' if S.VISION_ALGO_ENABLE else '关闭'}"
+        f"阶段3扩展: 视觉算法{'启用' if S.VISION_ALGO_ENABLE else '关闭'}"
         f"({S.VISION_TRAIN_N}样本训练) | MES追溯上限{S.MES_TRACE_MAX}"
         f" | 健康窗口{S.HEALTH_WINDOW_S:.0f}s",
         "=" * 78,
@@ -925,7 +925,7 @@ def main() -> int:
     os.makedirs(S.REPORT_DIR, exist_ok=True)
 
     print("=" * 78)
-    print("Virtual-Smart-Factory 班次3 全厂自检开始（A模块 → B Web/AGV/冒烟 → C 算法/MES/EMS）")
+    print("Virtual-Smart-Factory 阶段3 全厂自检开始（A模块 → B Web/AGV/冒烟 → C 算法/MES/EMS）")
     print("=" * 78)
 
     run_case("A1", "仿真时钟引擎", case_clock)
@@ -947,7 +947,7 @@ def main() -> int:
         run_case("B3", "AGV 任务闭环(入库+出库)", case_agv_loop)
         print("\n[B4] AGV 低电量回充排程：单工位互斥 / 任务优先 / 滞回轮换…")
         run_case("B4", "AGV 回充排程(低电触发)", case_agv_recharge)
-        # ---- 班次3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性 / 订单全生命周期）----
+        # ---- 阶段3修改：C 组用例（视觉算法 / MES 追溯 / EMS 合理性 / 订单全生命周期）----
         print("\n[C1] 视觉算法指标：三方 A/B 对照达标 + judge 注入在线混淆矩阵…")
         run_case("C1", "视觉算法指标达标(A/B对照)", case_vision_algo)
         print("\n[C2] MES 追溯闭环：四级反查 + 手动开单 + JSONL 回放重建…")
